@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="顔ノーツ">
+<meta name="theme-color" content="#140a2e">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>顔ノーツ☆カラオケバトル</title>
+<style>
+  :root {
+    --bg: #140a2e;
+    --panel: rgba(34, 20, 74, 0.84);
+    --line: rgba(255, 255, 255, 0.16);
+    --pink: #ff4fa3;
+    --cyan: #3fe0ff;
+    --yellow: #ffd84d;
+    --sub: #c3b8ea;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: #fff;
+    font-family: "Hiragino Maru Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input { user-select: text; -webkit-user-select: text; font-family: inherit; }
+  button { font-family: inherit; color: inherit; touch-action: manipulation; }
+
+  #app {
+    position: fixed;
+    inset: 0;
+    margin: 0 auto;
+    max-width: 560px;
+    overflow: hidden;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  /* ---------- 画面共通 ---------- */
+  .screen {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 18px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .screen.on { display: flex; }
+  .screen > * { flex-shrink: 0; }   /* 中身が多いときは縮めずにスクロールさせる */
+  .screen.center { justify-content: center; }
+  .screen.dim { background: rgba(10, 4, 28, 0.78); }
+  h2 { margin: 4px 0 0; font-size: 24px; letter-spacing: 0.06em; text-shadow: 0 0 14px rgba(255, 79, 163, 0.7); }
+  .sub { margin: 0; color: var(--sub); font-size: 13px; text-align: center; line-height: 1.6; }
+  .hint { margin: 8px 0 0; color: var(--sub); font-size: 12px; line-height: 1.6; }
+  .spacer { flex: 1 1 8px; }
+  .row { display: flex; gap: 10px; width: 100%; }
+  .row > * { flex: 1; }
+
+  .btn {
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    padding: 14px 22px;
+    font-size: 17px;
+    font-weight: bold;
+    background: linear-gradient(135deg, #ff4fa3, #ff8a3d);
+    box-shadow: 0 6px 18px rgba(255, 79, 163, 0.4);
+    cursor: pointer;
+    width: 100%;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn.big { font-size: 22px; padding: 18px 22px; max-width: 320px; }
+  .btn.sub { background: rgba(255, 255, 255, 0.1); border: 2px solid var(--cyan); color: #fff; box-shadow: none; font-size: 15px; }
+  .btn.ghost { background: transparent; border: 2px solid var(--line); box-shadow: none; color: var(--sub); font-size: 15px; }
+  .btn.danger { background: transparent; border: 2px solid #ff6b6b; color: #ff9c9c; box-shadow: none; font-size: 15px; }
+  .btn:disabled { opacity: 0.4; }
+
+  .panel {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 12px 14px;
+  }
+  .label { font-size: 13px; color: var(--sub); margin-bottom: 8px; }
+
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 2px solid var(--line);
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 10px 6px;
+    font-size: 14px;
+    font-weight: bold;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .seg button small { display: block; font-weight: normal; font-size: 11px; color: var(--sub); }
+  .seg button.on { border-color: var(--pink); background: rgba(255, 79, 163, 0.25); box-shadow: 0 0 12px rgba(255, 79, 163, 0.35); }
+  .seg.col { flex-direction: column; }
+  .seg.col button { text-align: left; padding: 10px 14px; }
+
+  .check { display: flex; align-items: center; gap: 10px; font-size: 14px; padding: 6px 0; }
+  .check input { width: 22px; height: 22px; accent-color: var(--pink); }
+  input[type=range] { width: 100%; accent-color: var(--pink); }
+
+  /* ---------- タイトル ---------- */
+  .logo { text-align: center; margin-top: 4vh; transform: rotate(-4deg); }
+  .logo-sub { display: block; font-size: 22px; font-weight: bold; color: var(--yellow); text-shadow: 0 0 12px rgba(255, 216, 77, 0.8); }
+  .logo-main {
+    display: block;
+    font-size: 54px;
+    line-height: 1.08;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    background: linear-gradient(180deg, #fff 20%, #ff9bd0 60%, #ff4fa3);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 16px rgba(255, 79, 163, 0.75));
+  }
+  .face-row { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; min-height: 64px; max-width: 360px; }
+  .face-row canvas { animation: bob 1.2s ease-in-out infinite; }
+  .face-row canvas:nth-child(2n) { animation-delay: -0.6s; }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  .lead { margin: 0; font-size: 15px; text-align: center; line-height: 1.7; }
+  .note { margin: 0; font-size: 11px; color: var(--sub); text-align: center; line-height: 1.6; }
+
+  /* ---------- メンバー ---------- */
+  .player-list { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+  .player {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 6px 12px 6px 6px;
+  }
+  .player.off { opacity: 0.45; }
+  .player .p-main { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+  .player .p-name { font-size: 17px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .p-edit { font-size: 11px; color: var(--sub); }
+  .player .p-join { width: 26px; height: 26px; accent-color: var(--pink); }
+  .empty { color: var(--sub); font-size: 14px; text-align: center; padding: 24px 0; line-height: 1.8; }
+
+  /* ---------- テンポ計測 ---------- */
+  .tap-pad {
+    width: min(62vw, 250px);
+    height: min(62vw, 250px);
+    border-radius: 50%;
+    border: 6px solid var(--cyan);
+    background: radial-gradient(circle at 50% 40%, rgba(63, 224, 255, 0.35), rgba(63, 224, 255, 0.06));
+    font-size: 44px;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    touch-action: none;
+    flex: none;
+  }
+  .bpm-row { display: flex; align-items: center; gap: 6px; }
+  .bpm-row button {
+    width: 46px; height: 46px; border-radius: 12px;
+    border: 2px solid var(--line); background: rgba(255, 255, 255, 0.08);
+    font-size: 16px; font-weight: bold; cursor: pointer;
+  }
+  .bpm-row input {
+    width: 104px; height: 54px; border-radius: 12px; border: 2px solid var(--pink);
+    background: rgba(0, 0, 0, 0.35); color: #fff; font-size: 30px; font-weight: bold; text-align: center;
+  }
+  .bpm-row .unit { font-size: 13px; color: var(--sub); }
+
+  /* ---------- NEXT / 結果 ---------- */
+  .next-label { font-size: 30px; font-weight: 900; letter-spacing: 0.3em; color: var(--yellow); text-shadow: 0 0 14px rgba(255, 216, 77, 0.8); }
+  .next-name { font-size: 34px; font-weight: 900; text-align: center; }
+  .pop { animation: pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both; }
+  @keyframes pop { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+  .rank-letter { font-size: 84px; font-weight: 900; line-height: 1; color: var(--yellow); text-shadow: 0 0 22px rgba(255, 216, 77, 0.85); }
+  .score-big { font-size: 40px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .score-big small { font-size: 16px; color: var(--sub); margin-left: 4px; }
+  .stats { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 15px; }
+  .stats div { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+  .stats b { font-variant-numeric: tabular-nums; }
+  .c-perfect { color: var(--yellow); } .c-great { color: #7dffb0; } .c-good { color: var(--cyan); } .c-miss { color: #9d94bd; }
+
+  /* ---------- ランキング ---------- */
+  .podium { display: flex; align-items: flex-end; justify-content: center; gap: 6px; width: 100%; min-height: 250px; }
+  .podium .col { flex: 1; max-width: 150px; display: flex; flex-direction: column; align-items: center; visibility: hidden; }
+  .podium .col.show { visibility: visible; animation: rise 0.7s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+  @keyframes rise { from { transform: translateY(60px) scale(0.6); opacity: 0; } to { transform: none; opacity: 1; } }
+  .podium .pname { font-weight: bold; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .podium .pscore { font-size: 13px; color: var(--yellow); font-variant-numeric: tabular-nums; }
+  .podium .block {
+    width: 100%; margin-top: 4px; border-radius: 10px 10px 0 0;
+    display: flex; align-items: flex-start; justify-content: center; padding-top: 6px;
+    font-size: 26px; font-weight: 900;
+  }
+  .podium .p1 .block { height: 96px; background: linear-gradient(180deg, #ffd84d, #c98a00); color: #4a3200; }
+  .podium .p2 .block { height: 66px; background: linear-gradient(180deg, #e3e8f2, #8b95a8); color: #2c3340; }
+  .podium .p3 .block { height: 44px; background: linear-gradient(180deg, #f0a56b, #9c5423); color: #3a1c06; }
+  .rank-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .rank-item {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 4px 12px 4px 6px;
+  }
+  .rank-item .no { width: 30px; text-align: center; font-size: 18px; font-weight: 900; color: var(--yellow); }
+  .rank-item .nm { flex: 1; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-item .sc { font-variant-numeric: tabular-nums; font-weight: bold; }
+  .rank-item .lt { width: 34px; text-align: right; font-weight: 900; color: var(--pink); }
+
+  /* ---------- ポーズボタン ---------- */
+  #btn-pause {
+    display: none;
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + 10px);
+    right: 10px;
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    border: 2px solid var(--line);
+    background: rgba(0, 0, 0, 0.35);
+    font-size: 15px; font-weight: bold;
+    cursor: pointer;
+  }
+
+  /* ---------- モーダル ---------- */
+  .modal {
+    position: absolute; inset: 0; z-index: 10;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(8, 3, 22, 0.86);
+    padding: 16px;
+  }
+  .modal.on { display: flex; }
+  .modal .box {
+    width: 100%; max-width: 360px;
+    background: #22144a; border: 1px solid var(--line); border-radius: 20px;
+    padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .modal h3 { margin: 0; font-size: 19px; }
+  #edit-avatar { background: none; border: 0; padding: 0; cursor: pointer; }
+  #edit-name {
+    width: 100%; height: 50px; border-radius: 12px; border: 2px solid var(--pink);
+    background: rgba(0, 0, 0, 0.35); color: #fff; font-size: 20px; text-align: center;
+  }
+  #crop-canvas { width: 300px; height: 300px; border-radius: 16px; touch-action: none; cursor: grab; background: #000; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="stage"></canvas>
+  <button id="btn-pause" aria-label="ポーズ">II</button>
+
+  <!-- タイトル -->
+  <section id="scr-title" class="screen">
+    <div class="logo"><span class="logo-sub">顔ノーツ☆</span><span class="logo-main">カラオケ<br>バトル</span></div>
+    <div class="spacer"></div>
+    <div id="title-faces" class="face-row"></div>
+    <p class="lead">流れてくる仲間の顔を<br>リズムに合わせてタップ！</p>
+    <div class="spacer"></div>
+    <button id="btn-start" class="btn big">あそぶ</button>
+    <p class="note">🔒 写真はこのスマホの中だけに保存されます<br>（どこにも送信されません）</p>
+  </section>
+
+  <!-- メンバー -->
+  <section id="scr-players" class="screen">
+    <h2>メンバー</h2>
+    <p class="sub">名前をタップで編集 ／ ✓ で今回の参加を切り替え<br>上から順番にプレイします</p>
+    <div id="player-list" class="player-list"></div>
+    <button id="btn-add" class="btn sub">＋ メンバーを追加</button>
+    <div class="spacer"></div>
+    <div class="row">
+      <button id="btn-players-back" class="btn ghost">もどる</button>
+      <button id="btn-players-next" class="btn">つぎへ</button>
+    </div>
+  </section>
+
+  <!-- あそびかた設定 -->
+  <section id="scr-setup" class="screen">
+    <h2>あそびかた</h2>
+    <div class="panel">
+      <div class="label">モード</div>
+      <div class="seg" id="seg-mode">
+        <button data-v="builtin">内蔵ビート<small>ゲームの曲で遊ぶ</small></button>
+        <button data-v="karaoke">カラオケに合わせる<small>お店の曲がそのまま譜面に</small></button>
+      </div>
+      <p class="hint" id="mode-hint"></p>
+    </div>
+    <div class="panel" id="panel-song">
+      <div class="label">曲</div>
+      <div class="seg col" id="seg-song"></div>
+    </div>
+    <div class="panel" id="panel-length">
+      <div class="label">1人あたりのプレイ時間</div>
+      <div class="seg" id="seg-length">
+        <button data-v="60">1分</button>
+        <button data-v="90">1分半</button>
+        <button data-v="120">2分</button>
+        <button data-v="0">曲の最後まで<small>終了ボタンで採点</small></button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="label">むずかしさ</div>
+      <div class="seg" id="seg-diff">
+        <button data-v="easy">かんたん</button>
+        <button data-v="normal">ふつう</button>
+        <button data-v="hard">むずかしい</button>
+      </div>
+    </div>
+    <div class="panel">
+      <label class="check"><input type="checkbox" id="chk-shuffle">順番をシャッフルする</label>
+      <label class="check"><input type="checkbox" id="chk-sfx">タップ音（タンバリン）を鳴らす</label>
+      <div id="offset-box">
+        <div class="label" style="margin-top:8px">判定タイミング調整：<b id="offset-val">0</b> ms</div>
+        <input type="range" id="rng-offset" min="-200" max="200" step="10">
+        <p class="hint">Bluetoothスピーカーなどで音が遅れるときは＋側へ。結果画面の「平均ズレ」が目安です。</p>
+      </div>
+    </div>
+    <div class="row">
+      <button id="btn-setup-back" class="btn ghost">もどる</button>
+      <button id="btn-setup-next" class="btn">スタート</button>
+    </div>
+  </section>
+
+  <!-- テンポ計測 (カラオケモード) -->
+  <section id="scr-tempo" class="screen">
+    <h2>テンポを合わせよう</h2>
+    <p class="sub">カラオケの曲を流して、手拍子のつもりで<br>丸をタップ！（8回以上がおすすめ）</p>
+    <div class="spacer"></div>
+    <button id="tap-pad" class="tap-pad">TAP</button>
+    <p id="tempo-hint" class="sub"></p>
+    <div class="bpm-row">
+      <button id="bpm-half">÷2</button>
+      <button id="bpm-minus">−1</button>
+      <input id="bpm-input" type="number" inputmode="numeric" min="50" max="240">
+      <button id="bpm-plus">＋1</button>
+      <button id="bpm-double">×2</button>
+    </div>
+    <p class="sub">BPM（曲のテンポが分かる場合は直接入力もOK）</p>
+    <label class="check"><input type="checkbox" id="chk-round">BPMを整数に丸める（おすすめ）</label>
+    <div class="spacer"></div>
+    <div class="row">
+      <button id="btn-tempo-back" class="btn ghost">もどる</button>
+      <button id="btn-tempo-reset" class="btn ghost">リセット</button>
+    </div>
+    <button id="btn-tempo-go" class="btn big">このテンポでスタート</button>
+  </section>
+
+  <!-- つぎの人 -->
+  <section id="scr-next" class="screen center">
+    <div class="next-label">NEXT</div>
+    <div id="next-avatar"></div>
+    <div id="next-name" class="next-name"></div>
+    <p id="next-info" class="sub"></p>
+    <button id="btn-go" class="btn big">スタート！</button>
+    <button id="btn-retempo" class="btn sub" style="max-width:320px">テンポを測り直してスタート</button>
+    <button id="btn-next-quit" class="btn ghost" style="max-width:320px">やめる</button>
+  </section>
+
+  <!-- ポーズ -->
+  <section id="scr-pause" class="screen center dim">
+    <h2>ポーズ</h2>
+    <p id="pause-note" class="sub"></p>
+    <button id="btn-resume" class="btn big">つづける</button>
+    <button id="btn-retry" class="btn sub" style="max-width:320px">やりなおす</button>
+    <button id="btn-finish" class="btn sub" style="max-width:320px">ここで終了して採点</button>
+    <button id="btn-quit" class="btn ghost" style="max-width:320px">やめてタイトルへ</button>
+  </section>
+
+  <!-- 1人ぶんの結果 -->
+  <section id="scr-result" class="screen center">
+    <div id="result-avatar"></div>
+    <div id="result-name" class="next-name" style="font-size:26px"></div>
+    <div id="result-rank" class="rank-letter"></div>
+    <div class="score-big"><span id="result-score">0</span><small>点</small></div>
+    <div class="panel">
+      <div class="stats">
+        <div><span class="c-perfect">PERFECT</span><b id="st-perfect">0</b></div>
+        <div><span class="c-great">GREAT</span><b id="st-great">0</b></div>
+        <div><span class="c-good">GOOD</span><b id="st-good">0</b></div>
+        <div><span class="c-miss">MISS</span><b id="st-miss">0</b></div>
+        <div><span>最大コンボ</span><b id="st-combo">0</b></div>
+        <div><span>平均ズレ</span><b id="st-offset">-</b></div>
+      </div>
+    </div>
+    <button id="btn-result-next" class="btn big">つぎの人へ</button>
+  </section>
+
+  <!-- 結果発表 -->
+  <section id="scr-ranking" class="screen">
+    <h2>結果発表</h2>
+    <div id="podium" class="podium"></div>
+    <div id="rank-list" class="rank-list"></div>
+    <div class="spacer"></div>
+    <div class="row">
+      <button id="btn-rank-title" class="btn ghost">タイトルへ</button>
+      <button id="btn-rank-again" class="btn">もう一回！</button>
+    </div>
+  </section>
+
+  <!-- メンバー編集 -->
+  <div id="modal-edit" class="modal">
+    <div class="box">
+      <h3 id="edit-title">メンバーを追加</h3>
+      <button id="edit-avatar" aria-label="写真をえらぶ"></button>
+      <button id="btn-photo" class="btn sub">📷 写真をえらぶ</button>
+      <input id="edit-name" type="text" maxlength="8" placeholder="なまえ" autocomplete="off">
+      <div class="row">
+        <button id="btn-edit-cancel" class="btn ghost">キャンセル</button>
+        <button id="btn-edit-save" class="btn">保存</button>
+      </div>
+      <button id="btn-edit-delete" class="btn danger">このメンバーを削除</button>
+    </div>
+  </div>
+
+  <!-- 写真の切り抜き -->
+  <div id="modal-crop" class="modal">
+    <div class="box">
+      <h3>顔を丸の中に合わせよう</h3>
+      <canvas id="crop-canvas"></canvas>
+      <p class="sub">ドラッグで移動・ピンチかスライダーで拡大<br>点線に目の高さを合わせるとサングラスがぴったり😎</p>
+      <input type="range" id="crop-zoom" min="0" max="100" value="0">
+      <div class="row">
+        <button id="btn-crop-cancel" class="btn ghost">キャンセル</button>
+        <button id="btn-crop-ok" class="btn">けってい</button>
+      </div>
+    </div>
+  </div>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+<script src="game.js"></script>
+</body>
+</html>

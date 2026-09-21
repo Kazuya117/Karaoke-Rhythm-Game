@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a1260"/>
+      <stop offset="1" stop-color="#140a2e"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" rx="36" fill="url(#bg)"/>
+  <!-- 顔ノーツ -->
+  <circle cx="90" cy="82" r="50" fill="#ffd84d" stroke="#ff4fa3" stroke-width="8"/>
+  <!-- サングラス -->
+  <rect x="52" y="64" width="34" height="22" rx="9" fill="#0d0d12"/>
+  <rect x="94" y="64" width="34" height="22" rx="9" fill="#0d0d12"/>
+  <path d="M86 70h8M52 70l-10-5M128 70l10-5" stroke="#0d0d12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M70 102q20 18 40 0" fill="none" stroke="#0d0d12" stroke-width="6" stroke-linecap="round"/>
+  <!-- 判定ライン -->
+  <path d="M20 150h140" stroke="#3fe0ff" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="90" cy="150" r="9" fill="#140a2e" stroke="#3fe0ff" stroke-width="5"/>
+</svg>
