@@ -1195,6 +1195,7 @@ const cloud = {
   round: null,    // { track, diff }
   entries: [],    // 取り寄せたスコア
   serverOld: false,   // スプレッドシート側のコードが古いとき
+  loading: false,     // お題やランキングを取り寄せている最中か
   pending: null,  // 送信中の処理
   isHost: false,
 };
@@ -1284,7 +1285,13 @@ function roundFromServer(r) {
   };
 }
 
-const newRoomCode = () => (Math.random().toString(36) + '00000').slice(2, 8);
+const newRoomCode = () => {
+  // 先頭を英字にしておく。'12e34' のような並びだと、
+  // スプレッドシートが数値として読み替えてしまい、お題が見つからなくなるため
+  const letters = 'abcdefghijkmnpqrstuvwxyz';
+  const head = letters[Math.floor(Math.random() * letters.length)];
+  return head + (Math.random().toString(36) + '00000').slice(2, 7);
+};
 
 async function cloudGet(room) {
   const base = state.cloud.endpoint;
@@ -1383,6 +1390,15 @@ async function cloudRetry() {
 }
 
 async function cloudRefresh() {
+  cloud.loading = true;
+  try {
+    return await cloudRefreshInner();
+  } finally {
+    cloud.loading = false;
+  }
+}
+
+async function cloudRefreshInner() {
   await cloudRetry();
   const j = await cloudGet(cloud.room);
   // 新しいコードなら round を必ず返す。無ければ古いまま動いている
@@ -1413,21 +1429,29 @@ function openCloudSetup() {
   showScreen('cloud');
 }
 
+// いまの状態を表す文。openRound と「ランキング更新」で同じものを使う
+function roundStatusText() {
+  if (cloud.serverOld) {
+    return cloud.isHost
+      ? '集計用のコードが古いままです。Apps Script を新しくしてデプロイし直してね'
+      : '集計用のコードが古いようです。幹事に Apps Script の更新をお願いしてね';
+  }
+  if (!cloud.round) {
+    return cloud.isHost
+      ? 'お題が登録されていません。「ランキング更新」を押すと登録し直します'
+      : 'お題がまだ登録されていません。幹事に「ランキング更新」を押してもらってね';
+  }
+  return cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+}
+
 function openRound() {
+  if (cloud.room) cloud.loading = true;   // 取り寄せる前から「読み込み中」と出す
   renderRound();
   showScreen('round');
   if (!cloud.room) return;
   $('round-status').textContent = cloud.round ? 'ランキングを取り寄せています…' : 'お題を取り寄せています…';
   cloudRefresh().then(() => {
-    $('round-status').textContent = cloud.serverOld
-      ? (cloud.isHost
-        ? '集計用のコードが古いままです。Apps Script を新しくしてデプロイし直してね'
-        : '集計用のコードが古いようです。幹事に Apps Script の更新をお願いしてね')
-      : !cloud.round
-        ? (cloud.isHost
-          ? 'お題が登録されていません。「ランキング更新」を押すと登録し直します'
-          : 'このお題は見つかりませんでした。幹事に新しいリンクをもらってね')
-        : cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+    $('round-status').textContent = roundStatusText();
     renderRound();
   }, () => {
     $('round-status').textContent = cloud.round
@@ -1442,7 +1466,7 @@ function renderRound() {
   if (!cloud.round) {
     const w = document.createElement('div');
     w.className = 'sub';
-    w.textContent = 'お題を読み込んでいます…';
+    w.textContent = cloud.loading ? 'お題を読み込んでいます…' : 'お題がまだ届いていません';
     box.appendChild(w);
   }
   if (cloud.round) {
@@ -2541,7 +2565,7 @@ function bindAll() {
   on('btn-round-refresh', () => {
     $('round-status').textContent = 'ランキングを取り寄せています…';
     cloudRefresh().then(() => {
-      $('round-status').textContent = cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+      $('round-status').textContent = roundStatusText();
       renderRound();
     }, () => { $('round-status').textContent = 'ランキングを取り寄せられませんでした。通信を確かめてね'; });
   });
