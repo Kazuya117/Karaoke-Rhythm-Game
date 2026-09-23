@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23g';
+const VERSION = '2026-09-23h';
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
 // 古いまま動いていることがあるので、その可能性を伝えられるようにする
@@ -1445,7 +1445,9 @@ function endpointToId(u) {
 }
 
 function makeRoundLink() {
-  const base = location.origin + location.pathname;
+  // ?v=... のような目印は、配るリンクにも引き継ぐ。
+  // これが落ちると、受け取った人が古いキャッシュのまま開いてしまう
+  const base = location.origin + location.pathname + location.search;
   const id = endpointToId(state.cloud.endpoint);
   if (id) return `${base}#e=${id}&r=${cloud.room}`;
   // 見慣れない形のURLのときは、これまでどおりまるごと入れる
