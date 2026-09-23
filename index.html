@@ -121,6 +121,31 @@
   .seg button small { display: block; font-weight: normal; font-size: 11px; color: var(--sub); }
   .seg button.on { border-color: var(--pink); background: rgba(255, 79, 163, 0.25); box-shadow: 0 0 12px rgba(255, 79, 163, 0.35); }
   .seg.col { flex-direction: column; }
+  .search-row { display: flex; gap: 8px; width: 100%; }
+  .search-row input {
+    flex: 1; min-width: 0; height: 48px; padding: 0 14px;
+    border-radius: 12px; border: 2px solid var(--line);
+    background: rgba(0, 0, 0, 0.35); color: #fff; font-size: 16px;
+  }
+  .search-row .btn { flex: 0 0 84px; height: 48px; padding: 0; font-size: 15px; }
+  .song-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .song-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 6px 12px 6px 6px; cursor: pointer; text-align: left;
+  }
+  .song-item:disabled { opacity: 0.5; }
+  .song-item img { width: 46px; height: 46px; border-radius: 8px; flex: none; background: #000; }
+  .song-item .t { flex: 1; min-width: 0; }
+  .song-item .t b { display: block; font-size: 15px; }
+  .song-item .t span { display: block; font-size: 12px; color: var(--sub); }
+  .song-item .t b, .song-item .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .now-song {
+    display: flex; align-items: center; gap: 8px; justify-content: center;
+    font-size: 13px; color: var(--sub); max-width: 100%;
+  }
+  .now-song img { width: 30px; height: 30px; border-radius: 6px; flex: none; }
+  .now-song span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .seg.col button { text-align: left; padding: 10px 14px; }
 
   .check { display: flex; align-items: center; gap: 10px; font-size: 14px; padding: 6px 0; }
@@ -302,15 +327,23 @@
     <h2>あそびかた</h2>
     <div class="panel">
       <div class="label">モード</div>
-      <div class="seg" id="seg-mode">
-        <button data-v="builtin">内蔵ビート<small>ゲームの曲で遊ぶ</small></button>
-        <button data-v="karaoke">カラオケに合わせる<small>お店の曲がそのまま譜面に</small></button>
+      <div class="seg col" id="seg-mode">
+        <button data-v="track">曲をえらぶ（30秒）<small>好きな曲を検索して、その曲で遊ぶ</small></button>
+        <button data-v="builtin">内蔵ビート<small>ゲームのオリジナル曲で遊ぶ</small></button>
+        <button data-v="karaoke">カラオケに合わせる<small>お店で流れている曲に合わせる</small></button>
       </div>
       <p class="hint" id="mode-hint"></p>
     </div>
     <div class="panel" id="panel-song">
       <div class="label">曲</div>
       <div class="seg col" id="seg-song"></div>
+    </div>
+    <div class="panel" id="panel-pick">
+      <div class="label">曲のえらびかた</div>
+      <div class="seg" id="seg-pick">
+        <button data-v="same">全員おなじ曲<small>公平に勝負</small></button>
+        <button data-v="each">1人ずつえらぶ<small>自分の得意な曲で</small></button>
+      </div>
     </div>
     <div class="panel" id="panel-length">
       <div class="label">1人あたりのプレイ時間</div>
@@ -368,6 +401,21 @@
     <button id="btn-tempo-go" class="btn big">このテンポでスタート</button>
   </section>
 
+  <!-- 曲さがし -->
+  <section id="scr-song" class="screen">
+    <h2>曲をえらぶ</h2>
+    <p class="sub">Apple の試聴用30秒音源で遊びます<br>曲に合わせた譜面が自動で作られます</p>
+    <div class="search-row">
+      <input id="song-q" type="search" placeholder="曲名・アーティスト名" autocomplete="off" enterkeyhint="search">
+      <button id="btn-song-search" class="btn">検索</button>
+    </div>
+    <p id="song-status" class="sub"></p>
+    <div id="song-list" class="song-list"></div>
+    <div class="spacer"></div>
+    <p class="note">検索した言葉は Apple の検索サービスに送られます</p>
+    <button id="btn-song-back" class="btn ghost">もどる</button>
+  </section>
+
   <!-- つぎの人 -->
   <section id="scr-next" class="screen center">
     <div class="next-label">NEXT</div>
@@ -376,6 +424,7 @@
     <p id="next-info" class="sub"></p>
     <button id="btn-go" class="btn big">スタート！</button>
     <button id="btn-retempo" class="btn sub" style="max-width:320px">テンポを測り直してスタート</button>
+    <button id="btn-resong" class="btn sub" style="max-width:320px">曲をえらび直す</button>
     <button id="btn-next-quit" class="btn ghost" style="max-width:320px">やめる</button>
   </section>
 
@@ -450,6 +499,7 @@
   </div>
 </div>
 <input type="file" id="file" accept="image/*" hidden>
+<script src="beat.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

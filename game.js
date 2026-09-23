@@ -38,7 +38,8 @@ function mulberry32(a) {
 const STORE_KEY = 'krg.v1';
 const state = {
   players: [],   // { id, name, photo (dataURL | null), color, active }
-  settings: { mode: 'builtin', song: 0, diff: 'normal', length: 90, sfx: true, shuffle: false, offset: 0, roundBpm: true },
+  settings: { mode: 'track', song: 0, diff: 'normal', length: 90, sfx: true, shuffle: false, offset: 0, roundBpm: true, songPick: 'same' },
+  recent: [],    // さいきん使った曲 { id, name, artist, art, url }
 };
 
 function loadState() {
@@ -46,6 +47,7 @@ function loadState() {
     const d = JSON.parse(localStorage.getItem(STORE_KEY));
     if (d && Array.isArray(d.players)) state.players = d.players;
     if (d && d.settings) Object.assign(state.settings, d.settings);
+    if (d && Array.isArray(d.recent)) state.recent = d.recent;
   } catch (e) { /* 壊れていたら初期状態で始める */ }
 }
 
@@ -410,6 +412,68 @@ const sfx = {
 };
 
 // ---------------------------------------------------------------
+// 曲さがし (Apple の試聴用30秒音源)
+//   えらんだ曲をその場で解析して、テンポと譜面を作る。
+//   音源はメモリ上だけで扱い、端末にもリポジトリにも保存しない。
+// ---------------------------------------------------------------
+const track = {
+  current: null,    // えらんだ曲
+  data: null,       // { buffer, analysis }
+  source: null,     // 再生中の音源
+  cache: new Map(), // url -> { buffer, analysis }
+  onPicked: null,   // えらび終わったあとにすること
+  busy: false,
+};
+
+async function searchTracks(term) {
+  const url = 'https://itunes.apple.com/search?media=music&entity=song&limit=20&country=JP&term=' + encodeURIComponent(term);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('search ' + r.status);
+  const j = await r.json();
+  return (j.results || []).filter((x) => x.previewUrl).map((x) => ({
+    id: String(x.trackId),
+    name: x.trackName,
+    artist: x.artistName,
+    art: x.artworkUrl100 || '',
+    url: x.previewUrl,
+  }));
+}
+
+// 音源を読み込んで解析する。同じ曲の2回目はすぐ返る
+async function prepareTrack(t, onStep) {
+  const hit = track.cache.get(t.url);
+  if (hit) return hit;
+  if (onStep) onStep('曲を読み込み中…');
+  const r = await fetch(t.url);
+  if (!r.ok) throw new Error('fetch ' + r.status);
+  const bytes = await r.arrayBuffer();
+  if (onStep) onStep('曲を聴いています…');
+  const buffer = await actx.decodeAudioData(bytes);
+  if (onStep) onStep('譜面を作っています…');
+  // 表示を先に更新してから、重い解析に入る
+  await new Promise((res) => setTimeout(res, 30));
+  const analysis = Beat.analyze(buffer);
+  if (!analysis) throw new Error('analyze failed');
+  const data = { buffer, analysis };
+  if (track.cache.size > 8) track.cache.delete(track.cache.keys().next().value);
+  track.cache.set(t.url, data);
+  return data;
+}
+
+function rememberTrack(t) {
+  state.recent = [t].concat(state.recent.filter((x) => x.url !== t.url)).slice(0, 12);
+  saveState();
+}
+
+function trackStop() {
+  if (track.source) {
+    try { track.source.stop(); } catch (e) { /* もう止まっている */ }
+    try { track.source.disconnect(); } catch (e) { /* 同上 */ }
+    track.source = null;
+  }
+}
+
+// ---------------------------------------------------------------
 // 内蔵ビート: 曲データと譜面の自動生成
 //   メロディを乱数で作り、その音の出るタイミングをそのまま譜面にする
 // ---------------------------------------------------------------
@@ -655,6 +719,7 @@ let play = null;      // プレイ中の状態
 const tempo = { taps: [], bpm: 120, anchorT: null, anchorI: 0, ready: false };
 
 function showScreen(name) {
+  if (name !== 'ranking') stopConfetti();   // 紙吹雪は結果発表の画面だけ
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === 'scr-' + name));
   $('btn-pause').style.display = name === 'play' ? 'block' : 'none';
   ui.screen = name;
@@ -694,7 +759,6 @@ function bindSeg(id, get, set) {
 
 // ----- タイトル -----
 function showTitle() {
-  stopConfetti();
   const row = $('title-faces');
   row.textContent = '';
   state.players.slice(0, 8).forEach((p) => row.appendChild(avatarCanvas(p.id, 44)));
@@ -924,19 +988,23 @@ function bindSetup() {
     segSong.appendChild(b);
   });
   const panels = () => {
-    const k = s.mode === 'karaoke';
-    $('panel-song').style.display = k ? 'none' : 'block';
-    $('panel-length').style.display = k ? 'block' : 'none';
-    $('offset-box').style.display = k ? 'none' : 'block';
-    $('mode-hint').textContent = k
-      ? 'カラオケ機で曲を流し、そのビートをタップしてテンポを測ります。歌う人の横で、タンバリン係として遊べます。'
-      : 'ゲームが演奏するオリジナル曲で遊びます。1人あたり約1分。';
+    const m = s.mode;
+    $('panel-song').style.display = m === 'builtin' ? 'block' : 'none';
+    $('panel-pick').style.display = m === 'track' ? 'block' : 'none';
+    $('panel-length').style.display = m === 'karaoke' ? 'block' : 'none';
+    $('offset-box').style.display = m === 'karaoke' ? 'none' : 'block';
+    $('mode-hint').textContent = m === 'track'
+      ? '好きな曲を検索して、その30秒の試聴音源で遊びます。テンポも譜面も自動で作られます。（通信が必要です）'
+      : m === 'karaoke'
+        ? 'カラオケ機で曲を流し、そのビートをタップしてテンポを測ります。歌う人の横で、タンバリン係として遊べます。'
+        : 'ゲームが演奏するオリジナル曲で遊びます。1人あたり約1分。';
   };
   const segs = [
     bindSeg('seg-mode', () => s.mode, (v) => { s.mode = v; panels(); }),
     bindSeg('seg-song', () => s.song, (v) => { s.song = Number(v); }),
     bindSeg('seg-length', () => s.length, (v) => { s.length = Number(v); }),
     bindSeg('seg-diff', () => s.diff, (v) => { s.diff = v; }),
+    bindSeg('seg-pick', () => s.songPick, (v) => { s.songPick = v; }),
   ];
   $('chk-shuffle').addEventListener('change', (e) => { s.shuffle = e.target.checked; saveState(); });
   $('chk-sfx').addEventListener('change', (e) => { s.sfx = e.target.checked; saveState(); });
@@ -956,6 +1024,84 @@ function bindSetup() {
   refreshSetup();
 }
 
+// ----- 曲さがし画面 -----
+function openSong(after) {
+  track.onPicked = after;
+  $('song-status').textContent = '';
+  $('song-q').value = '';   // 次の人が自分で検索しやすいように空にしておく
+  renderSongList(state.recent, true);
+  showScreen('song');
+}
+
+function renderSongList(list, isRecent) {
+  const box = $('song-list');
+  box.textContent = '';
+  if (!list.length) {
+    $('song-status').textContent = isRecent ? '曲名やアーティスト名で検索してね' : '見つかりませんでした';
+    return;
+  }
+  $('song-status').textContent = isRecent ? 'さいきん使った曲' : '';
+  for (const t of list) {
+    const b = document.createElement('button');
+    b.className = 'song-item';
+    if (t.art) {
+      const img = document.createElement('img');
+      img.src = t.art;
+      img.alt = '';
+      b.appendChild(img);
+    }
+    const d = document.createElement('div');
+    d.className = 't';
+    const nm = document.createElement('b');
+    nm.textContent = t.name;
+    const ar = document.createElement('span');
+    ar.textContent = t.artist;
+    d.append(nm, ar);
+    b.appendChild(d);
+    b.addEventListener('click', () => pickTrack(t, b));
+    box.appendChild(b);
+  }
+}
+
+async function doSearch() {
+  const q = $('song-q').value.trim();
+  if (!q) { renderSongList(state.recent, true); return; }
+  $('song-q').blur();
+  $('song-status').textContent = 'さがしています…';
+  $('song-list').textContent = '';
+  try {
+    renderSongList(await searchTracks(q), false);
+  } catch (e) {
+    $('song-status').textContent = '検索できませんでした。通信を確かめてね';
+  }
+}
+
+async function pickTrack(t, btn) {
+  if (track.busy) return;
+  track.busy = true;
+  document.querySelectorAll('.song-item').forEach((el) => { el.disabled = true; });
+  if (btn) btn.classList.add('on');
+  initAudio();
+  try {
+    const data = await prepareTrack(t, (msg) => { $('song-status').textContent = msg; });
+    track.current = t;
+    track.data = data;
+    rememberTrack(t);
+    const after = track.onPicked;
+    track.onPicked = null;
+    track.busy = false;
+    $('song-status').textContent = '';
+    if (after) after();
+  } catch (e) {
+    track.busy = false;
+    $('song-status').textContent = 'この曲は読み込めませんでした。ほかの曲をえらんでね';
+    document.querySelectorAll('.song-item').forEach((el) => {
+      el.disabled = false;
+      el.classList.remove('on');
+    });
+  }
+}
+
 // ----- セッション (全員ぶんのプレイ) -----
 function beginSession() {
   const ids = activePlayers().map((p) => p.id);
@@ -973,17 +1119,23 @@ function beginSession() {
 const currentPlayer = () => playerById(session.order[session.idx]);
 
 function showNext() {
-  stopConfetti();
   const p = currentPlayer(), s = state.settings;
-  const karaoke = s.mode === 'karaoke';
+  const karaoke = s.mode === 'karaoke', isTrack = s.mode === 'track';
+  const eachSong = isTrack && s.songPick === 'each';
   setAvatar($('next-avatar'), p.id, 150);
   $('next-avatar').className = 'pop';
   $('next-name').textContent = p.name + ' さん';
-  const what = karaoke ? 'カラオケに合わせる' : SONGS[s.song].name;
+  const needSong = isTrack && (eachSong || !track.current);
+  const what = karaoke ? 'カラオケに合わせる'
+    : isTrack ? (needSong ? '曲をえらぶ' : track.current.name)
+      : SONGS[s.song].name;
   $('next-info').textContent = `${session.idx + 1} / ${session.order.length} 人目 ・ ${what} ・ ${DIFF_LABEL[s.diff]}\nスマホを渡してね`;
   $('next-info').style.whiteSpace = 'pre-line';
-  $('btn-go').textContent = !karaoke ? 'スタート！' : tempo.ready ? `BPM ${tempo.bpm} のままスタート！` : 'テンポを合わせる';
+  $('btn-go').textContent = needSong ? '曲をえらぶ'
+    : karaoke ? (tempo.ready ? `BPM ${tempo.bpm} のままスタート！` : 'テンポを合わせる')
+      : 'スタート！';
   $('btn-retempo').style.display = karaoke && tempo.ready ? 'block' : 'none';
+  $('btn-resong').style.display = isTrack && !needSong ? 'block' : 'none';
   showScreen('next');
   sfx.next();
 }
@@ -1064,9 +1216,28 @@ function startTurn() {
   const begin = () => {
     const s = state.settings, p = currentPlayer();
     const karaoke = s.mode === 'karaoke';
+    const isTrack = s.mode === 'track' && !!track.data;
     const audioOk = actx && actx.state === 'running';
     let chart, spb;
-    if (karaoke) {
+    if (isTrack) {
+      const a = track.data.analysis;
+      spb = 60 / a.bpm;
+      // 最初のノーツが画面に入りきるように、少し後ろから始める
+      const from = Math.max(a.offset, APPROACH[s.diff] + 0.7);
+      const raw = Beat.buildNotes(a, s.diff, from, a.duration - 0.15);
+      const fv = Beat.feverRange(a);
+      // 曲の中の時刻を、1拍目を0とした「拍」に直す
+      const toBeat = (t) => (t - a.offset) / spb;
+      chart = {
+        notes: raw.map((n) => ({
+          beat: toBeat(n.time), lane: n.lane,
+          fever: !!fv && n.time >= fv[0] && n.time < fv[1],
+        })),
+        fever: fv ? [[toBeat(fv[0]), toBeat(fv[1])]] : [],
+        leadBeats: raw.length ? Math.max(0, toBeat(raw[0].time) - 1) : 0,
+        totalBeats: toBeat(a.duration),
+      };
+    } else if (karaoke) {
       spb = 60 / tempo.bpm;
       chart = buildKaraokeChart(tempo.bpm, s.diff, s.length, (Date.now() & 0xffff) + session.idx);
     } else {
@@ -1084,10 +1255,11 @@ function startTurn() {
       mode: s.mode, diff: s.diff, player: p, spb,
       clock: !karaoke && audioOk ? 'audio' : 'perf',
       notes: chart.notes, fever: chart.fever, leadBeats: chart.leadBeats,
-      duration: chart.totalBeats * spb + (karaoke ? 0.5 : 1.2),
+      duration: chart.totalBeats * spb + (karaoke ? 0.5 : isTrack ? 0.4 : 1.2),
       endless: karaoke && s.length === 0,
       approach: APPROACH[s.diff],
       offset: karaoke ? 0 : s.offset / 1000,
+      title: isTrack ? track.current.name : '',
       head: 0, wsum: 0, combo: 0, maxCombo: 0, missStreak: 0, judged: 0,
       counts: { perfect: 0, great: 0, good: 0, miss: 0 },
       offSum: 0, offN: 0,
@@ -1101,6 +1273,15 @@ function startTurn() {
       if (tempo.anchorT === null) { tempo.anchorT = now; tempo.anchorI = 0; }
       const k0 = Math.ceil((now + 0.05 - tempo.anchorT) / spb + tempo.anchorI);
       play.origin = tempo.anchorT + (k0 - tempo.anchorI) * spb;
+    } else if (isTrack && play.clock === 'audio') {
+      // 曲を鳴らし始める時刻を決め、ゲームの時計は曲の「1拍目」を0にそろえる
+      const at = actx.currentTime + 0.6;
+      play.origin = at + track.data.analysis.offset;
+      trackStop();
+      track.source = actx.createBufferSource();
+      track.source.buffer = track.data.buffer;
+      track.source.connect(master);
+      track.source.start(at);
     } else if (play.clock === 'audio') {
       play.origin = actx.currentTime + 0.5;
       musicStart(chart.events, play.origin, spb);
@@ -1231,6 +1412,7 @@ function resumeGame() {
 // 途中でやめる・やりなおすときの後片づけ
 function abortPlay() {
   musicStop();
+  trackStop();
   holdSuspend = false;
   if (actx && actx.state !== 'running') actx.resume().catch(() => {});
   keepTempoPhase();
@@ -1376,6 +1558,14 @@ function resize() {
   const cs = getComputedStyle(safeProbe);
   view.safeTop = parseFloat(cs.paddingTop) || 0;
   view.safeBottom = parseFloat(cs.paddingBottom) || 0;
+}
+
+// 長い曲名は「…」で切る
+function ellipsis(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
 }
 
 function drawBackground(now, beatPhase, fever) {
@@ -1563,6 +1753,10 @@ function drawPlay(now) {
     ctx.font = `bold 13px ${FONT}`;
     ctx.fillStyle = '#c3b8ea';
     ctx.fillText(`${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}  終了は右上の II から`, 96, hudTop + 92);
+  } else if (play.title) {
+    ctx.font = `bold 13px ${FONT}`;
+    ctx.fillStyle = '#c3b8ea';
+    ctx.fillText(ellipsis(play.title, w - 96 - 58), 96, hudTop + 92);
   }
 
   // はじまる前のカウント
@@ -1679,7 +1873,22 @@ function bindAll() {
     showScreen('setup');
   });
   on('btn-setup-back', () => { renderPlayers(); showScreen('players'); });
-  on('btn-setup-next', beginSession);
+  on('btn-setup-next', () => {
+    const t = state.settings;
+    // 全員おなじ曲のときは、始める前に1曲えらんでおく
+    if (t.mode === 'track' && t.songPick === 'same' && !track.current) openSong(beginSession);
+    else beginSession();
+  });
+
+  // 曲さがし
+  on('btn-song-search', doSearch);
+  on('btn-song-back', () => {
+    track.onPicked = null;
+    if (session) showNext();
+    else showScreen('setup');
+  });
+  $('song-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+  $('song-q').addEventListener('search', doSearch);
 
   // メンバー編集
   const pickPhoto = () => $('file').click();
@@ -1701,10 +1910,13 @@ function bindAll() {
 
   // つぎの人 / テンポ
   on('btn-go', () => {
-    if (state.settings.mode === 'karaoke' && !tempo.ready) openTempo();
+    const t = state.settings;
+    if (t.mode === 'track' && (t.songPick === 'each' || !track.current)) openSong(startTurn);
+    else if (t.mode === 'karaoke' && !tempo.ready) openTempo();
     else startTurn();
   });
   on('btn-retempo', openTempo);
+  on('btn-resong', () => openSong(startTurn));
   on('btn-next-quit', () => { session = null; showTitle(); });
   $('tap-pad').addEventListener('pointerdown', (e) => { e.preventDefault(); initAudio(); tempoTap(); });
   on('bpm-minus', () => setBpm(tempo.bpm - 1));
