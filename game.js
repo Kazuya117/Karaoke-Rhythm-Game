@@ -40,6 +40,7 @@ const state = {
   players: [],   // { id, name, photo (dataURL | null), color, active }
   settings: { mode: 'track', song: 0, diff: 'normal', length: 90, sfx: true, shuffle: false, offset: 0, roundBpm: true, songPick: 'same' },
   recent: [],    // さいきん使った曲 { id, name, artist, art, url }
+  cloud: { endpoint: '', me: '', room: '', round: null, isHost: false, retry: null },   // 集計用のURL・この端末の持ち主・いまのお題・未送信のスコア
 };
 
 function loadState() {
@@ -48,6 +49,7 @@ function loadState() {
     if (d && Array.isArray(d.players)) state.players = d.players;
     if (d && d.settings) Object.assign(state.settings, d.settings);
     if (d && Array.isArray(d.recent)) state.recent = d.recent;
+    if (d && d.cloud) Object.assign(state.cloud, d.cloud);
   } catch (e) { /* 壊れていたら初期状態で始める */ }
 }
 
@@ -801,6 +803,7 @@ function renderPlayers() {
 }
 
 let editing = null;
+let afterEdit = null;   // 保存したあとにすること
 
 function openEdit(p) {
   editing = p
@@ -828,7 +831,10 @@ function saveEdit() {
   Object.assign(p, { name, photo: editing.photo, color: editing.color });
   $('modal-edit').classList.remove('on');
   if (!saveState()) toast('保存容量がいっぱいです。この写真は今回だけ使えます');
-  buildSprite(p).then(renderPlayers);
+  buildSprite(p).then(() => {
+    renderPlayers();
+    if (afterEdit) { const f = afterEdit; afterEdit = null; f(p); }
+  });
 }
 
 function deleteEdit() {
@@ -974,6 +980,7 @@ function bindCropper() {
 
 // ----- あそびかた設定 -----
 let refreshSetup = () => {};
+let refreshRoundDiff = () => {};
 
 function bindSetup() {
   const s = state.settings;
@@ -1013,7 +1020,9 @@ function bindSetup() {
     $('offset-val').textContent = (s.offset > 0 ? '+' : '') + s.offset;
     saveState();
   });
+  refreshRoundDiff = bindSeg('seg-rdiff', () => s.diff, (v) => { s.diff = v; refreshSetup(); });
   refreshSetup = () => {
+    refreshRoundDiff();
     segs.forEach((f) => f());
     panels();
     $('chk-shuffle').checked = s.shuffle;
@@ -1025,8 +1034,9 @@ function bindSetup() {
 }
 
 // ----- 曲さがし画面 -----
-function openSong(after) {
+function openSong(after, backTo) {
   track.onPicked = after;
+  track.backTo = backTo || 'setup';
   $('song-status').textContent = '';
   $('song-q').value = '';   // 次の人が自分で検索しやすいように空にしておく
   renderSongList(state.recent, true);
@@ -1100,6 +1110,370 @@ async function pickTrack(t, btn) {
       el.classList.remove('on');
     });
   }
+}
+
+// ---------------------------------------------------------------
+// みんなでランキング (Googleスプレッドシートに集計)
+//   幹事が「お題」(曲とむずかしさ) を決めてリンクを配り、
+//   各自が自分のスマホで別々に遊ぶと、スコアが集まって順位が出る。
+// ---------------------------------------------------------------
+const CLOUD_HOST = 'script.google.com';
+const cloud = {
+  room: '',       // お題のID
+  round: null,    // { track, diff }
+  entries: [],    // 取り寄せたスコア
+  pending: null,  // 送信中の処理
+  isHost: false,
+};
+
+// リンクに書かれたURLをそのまま信用しないための確認
+function cloudUrlOk(u) {
+  try {
+    const x = new URL(u);
+    return x.protocol === 'https:' && x.hostname === CLOUD_HOST;
+  } catch (e) { return false; }
+}
+
+function b64urlEnc(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDec(str) {
+  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function makeRoundLink() {
+  const t = cloud.round.track;
+  const payload = {
+    e: state.cloud.endpoint, r: cloud.room, d: cloud.round.diff,
+    t: { u: t.url, n: t.name, a: t.artist, c: t.art },
+  };
+  return location.origin + location.pathname + '#p=' + b64urlEnc(payload);
+}
+
+function readRoundLink() {
+  const m = /[#&]p=([A-Za-z0-9_-]+)/.exec(location.hash || '');
+  if (!m) return null;
+  try {
+    const d = b64urlDec(m[1]);
+    if (!d || !cloudUrlOk(d.e) || !d.r || !d.t || !d.t.u) return null;
+    // 曲は Apple の試聴音源だけを受け付ける
+    if (!/^https:\/\/[\w.-]*\.apple\.com\//.test(d.t.u)) return null;
+    return {
+      endpoint: d.e,
+      room: String(d.r),
+      diff: DIFF_LABEL[d.d] ? d.d : 'normal',
+      track: {
+        id: d.t.u, name: String(d.t.n || '曲'), artist: String(d.t.a || ''),
+        art: /^https:\/\//.test(d.t.c || '') ? d.t.c : '', url: d.t.u,
+      },
+    };
+  } catch (e) { return null; }
+}
+
+const newRoomCode = () => Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 5);
+
+async function cloudGet(room) {
+  const base = state.cloud.endpoint;
+  const url = base + (base.includes('?') ? '&' : '?') + 'room=' + encodeURIComponent(room) + '&t=' + Date.now();
+  const r = await fetch(url, { redirect: 'follow' });
+  if (!r.ok) throw new Error('GET ' + r.status);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'error');
+  return j;
+}
+
+// 送信は返事を読まない形にしておき、そのあと取得して届いたか確かめる
+async function cloudPost(payload) {
+  await fetch(state.cloud.endpoint, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+    redirect: 'follow',
+  });
+}
+
+// ランキングに載せる小さめの顔写真を作る
+function avatarData(id) {
+  const sp = sprites.get(id);
+  if (!sp) return '';
+  const c = document.createElement('canvas');
+  c.width = c.height = 96;
+  const x = c.getContext('2d');
+  x.fillStyle = '#140a2e';
+  x.fillRect(0, 0, 96, 96);
+  x.drawImage(sp.color, 0, 0, 96, 96);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+
+const cloudSig = new Map();
+
+function hashIdx(str, n) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(h) % n;
+}
+
+// ほかの人の顔を、ランキングに描けるように用意する
+function buildCloudSprites(entries) {
+  const jobs = [];
+  for (const e of entries) {
+    const id = 'c:' + e.playerId;
+    const sig = (e.avatar || '').length + ':' + e.name;
+    if (sprites.has(id) && cloudSig.get(id) === sig) continue;
+    cloudSig.set(id, sig);
+    jobs.push(buildSprite({
+      id, name: e.name, photo: e.avatar || null,
+      color: AVATAR_COLORS[hashIdx(e.playerId, AVATAR_COLORS.length)],
+    }));
+  }
+  return Promise.all(jobs);
+}
+
+async function cloudSubmit(result) {
+  const p = playerById(result.id);
+  await cloudPost({
+    type: 'score',
+    room: cloud.room,
+    playerId: result.id,
+    name: p ? p.name : '',
+    score: result.score,
+    letter: result.letter,
+    perfect: result.counts.perfect,
+    great: result.counts.great,
+    good: result.counts.good,
+    miss: result.counts.miss,
+    maxCombo: result.maxCombo,
+    song: cloud.round ? cloud.round.track.name : '',
+    diff: cloud.round ? cloud.round.diff : '',
+    avatar: avatarData(result.id),
+  });
+  const j = await cloudGet(cloud.room);
+  cloud.entries = j.entries || [];
+  if (!cloud.entries.some((e) => e.playerId === result.id)) throw new Error('not saved');
+  if (state.cloud.retry && state.cloud.retry.result.id === result.id) {
+    state.cloud.retry = null;
+    saveState();
+  }
+  await buildCloudSprites(cloud.entries);
+  return cloud.entries;
+}
+
+// 送れなかったスコアがあれば、まず送り直す
+async function cloudRetry() {
+  const r = state.cloud.retry;
+  if (!r || r.room !== cloud.room) return;
+  await cloudSubmit(r.result);
+  state.cloud.retry = null;
+  saveState();
+}
+
+async function cloudRefresh() {
+  await cloudRetry();
+  const j = await cloudGet(cloud.room);
+  cloud.entries = j.entries || [];
+  await buildCloudSprites(cloud.entries);
+  return cloud.entries;
+}
+
+const cloudRankList = () => cloud.entries.map((e) => ({
+  spriteId: 'c:' + e.playerId, name: e.name, score: e.score,
+  letter: e.letter, me: e.playerId === state.cloud.me,
+}));
+
+// ----- お題の画面 -----
+function openCloudSetup() {
+  $('cloud-url').value = state.cloud.endpoint;
+  $('cloud-status').textContent = '';
+  refreshRoundDiff();
+  showScreen('cloud');
+}
+
+function openRound() {
+  renderRound();
+  showScreen('round');
+  if (!cloud.room) return;
+  $('round-status').textContent = 'ランキングを取り寄せています…';
+  cloudRefresh().then(() => {
+    $('round-status').textContent = cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+    renderRound();
+  }, () => { $('round-status').textContent = 'ランキングを取り寄せられませんでした。通信を確かめてね'; });
+}
+
+function renderRound() {
+  const box = $('round-song');
+  box.textContent = '';
+  if (cloud.round) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    if (cloud.round.track.art) {
+      const img = document.createElement('img');
+      img.src = cloud.round.track.art;
+      img.alt = '';
+      card.appendChild(img);
+    }
+    const d = document.createElement('div');
+    d.className = 't';
+    const nm = document.createElement('b');
+    nm.textContent = cloud.round.track.name;
+    const ar = document.createElement('span');
+    ar.textContent = cloud.round.track.artist + ' ・ ' + DIFF_LABEL[cloud.round.diff];
+    d.append(nm, ar);
+    card.appendChild(d);
+    box.appendChild(card);
+  }
+
+  const me = playerById(state.cloud.me);
+  const row = $('round-me');
+  row.textContent = '';
+  row.appendChild(avatarCanvas(me ? me.id : '__none', 46));
+  const t = document.createElement('div');
+  t.className = 't';
+  const b = document.createElement('b');
+  b.textContent = me ? me.name : 'あなたの名前を登録';
+  const sp = document.createElement('span');
+  sp.textContent = me ? 'タップで名前と写真をかえる' : 'タップして名前と顔写真を登録しよう';
+  t.append(b, sp);
+  row.appendChild(t);
+
+  $('btn-round-play').disabled = !me || !cloud.round;
+  $('btn-round-song').style.display = cloud.isHost ? 'block' : 'none';
+  $('btn-round-link').style.display = cloud.isHost ? 'block' : 'none';
+
+  const list = $('round-rank');
+  list.textContent = '';
+  cloud.entries.forEach((e, i) => {
+    const item = document.createElement('div');
+    item.className = 'rank-item' + (e.playerId === state.cloud.me ? ' me' : '');
+    const no = document.createElement('div');
+    no.className = 'no';
+    no.textContent = String(i + 1);
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = e.name;
+    const sc = document.createElement('div');
+    sc.className = 'sc';
+    sc.textContent = e.score.toLocaleString();
+    const lt = document.createElement('div');
+    lt.className = 'lt';
+    lt.textContent = e.letter;
+    item.append(no, avatarCanvas('c:' + e.playerId, 34, i === 0 ? { crown: true } : {}), nm, sc, lt);
+    list.appendChild(item);
+  });
+}
+
+function createRound() {
+  cloud.room = newRoomCode();
+  cloud.round = { track: track.current, diff: state.settings.diff };
+  cloud.entries = [];
+  cloud.isHost = true;
+  rememberRound();
+  openRound();
+}
+
+function rememberRound() {
+  state.cloud.room = cloud.room;
+  state.cloud.round = cloud.round;
+  state.cloud.isHost = cloud.isHost;
+  saveState();
+}
+
+async function cloudTest() {
+  const u = $('cloud-url').value.trim();
+  if (!cloudUrlOk(u)) {
+    $('cloud-status').textContent = '× script.google.com の https から始まるURLを貼ってください';
+    return;
+  }
+  state.cloud.endpoint = u;
+  saveState();
+  $('cloud-status').textContent = 'ためしています…';
+  try {
+    await cloudGet('');
+  } catch (e) {
+    $('cloud-status').textContent = '× つながりません。デプロイの「アクセスできるユーザー」が「全員」になっているか確かめてね';
+    return;
+  }
+  try {
+    await cloudPost({
+      type: 'score', room: '__test', playerId: '__test', name: 'テスト',
+      score: 1, letter: 'D', perfect: 0, great: 0, good: 0, miss: 0, maxCombo: 0,
+      song: '接続テスト', diff: '',
+    });
+    const j = await cloudGet('__test');
+    const ok = (j.entries || []).some((e) => e.playerId === '__test');
+    $('cloud-status').textContent = ok
+      ? '○ つながりました！スプレッドシートに「テスト」の行ができています'
+      : '△ 読み取りはできましたが、書き込みが届きませんでした';
+  } catch (e) {
+    $('cloud-status').textContent = '△ 読み取りはできましたが、書き込みを確かめられませんでした';
+  }
+}
+
+async function copyText(t) {
+  try {
+    await navigator.clipboard.writeText(t);
+    return true;
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+}
+
+async function startOnlineTurn() {
+  if (!state.cloud.me) { toast('先に名前と写真を登録してね'); return; }
+  if (!cloud.round) return;
+  initAudio();
+  try {
+    const data = await prepareTrack(cloud.round.track, (m) => { $('round-status').textContent = m; });
+    track.current = cloud.round.track;
+    track.data = data;
+  } catch (e) {
+    $('round-status').textContent = '曲を読み込めませんでした。通信を確かめてね';
+    return;
+  }
+  $('round-status').textContent = '';
+  session = {
+    order: [state.cloud.me], idx: 0, results: [], online: true,
+    force: { mode: 'track', diff: cloud.round.diff },
+  };
+  startTurn();
+}
+
+async function finishOnline() {
+  const btn = $('btn-result-next');
+  btn.disabled = true;
+  btn.textContent = 'スコアを送っています…';
+  try {
+    await (cloud.pending || cloudSubmit(session.results[0]));
+  } catch (e) {
+    // あとで送り直せるように取っておく
+    state.cloud.retry = { room: cloud.room, result: session.results[0] };
+    saveState();
+    toast('スコアを送れませんでした。「ランキング更新」で送り直せます');
+  }
+  cloud.pending = null;
+  btn.disabled = false;
+  btn.textContent = 'ランキングを見る';
+  $('btn-rank-title').textContent = 'お題にもどる';
+  const r = session.results[0];
+  const me = playerById(r.id);
+  const list = cloudRankList();
+  showRanking(list.length ? list
+    : [{ spriteId: r.id, name: me ? me.name : '', score: r.score, letter: r.letter, me: true }]);
 }
 
 // ----- セッション (全員ぶんのプレイ) -----
@@ -1214,7 +1588,9 @@ function audioNow() {
 
 function startTurn() {
   const begin = () => {
-    const s = state.settings, p = currentPlayer();
+    // みんなでランキングのときは、お題の曲とむずかしさを優先する
+    const s = session.force ? Object.assign({}, state.settings, session.force) : state.settings;
+    const p = currentPlayer();
     const karaoke = s.mode === 'karaoke';
     const isTrack = s.mode === 'track' && !!track.data;
     const audioOk = actx && actx.state === 'running';
@@ -1445,6 +1821,10 @@ function finishTurn(early) {
     avgOffset: play.offN ? Math.round(1000 * play.offSum / play.offN) : null,
   };
   session.results.push(r);
+  if (session.online) {
+    cloud.pending = cloudSubmit(r);
+    cloud.pending.catch(() => {});   // 失敗は finishOnline 側で伝える
+  }
   const wasKaraoke = play.mode === 'karaoke';
   abortPlay();
   showResult(r, wasKaraoke);
@@ -1465,7 +1845,8 @@ function showResult(r, wasKaraoke) {
   $('st-offset').textContent = r.avgOffset === null || wasKaraoke ? '-'
     : `${r.avgOffset > 0 ? '+' : ''}${r.avgOffset}ms ${Math.abs(r.avgOffset) < 25 ? '' : r.avgOffset > 0 ? '(おそめ)' : '(はやめ)'}`;
   $('result-rank').textContent = '';
-  $('btn-result-next').textContent = session.idx + 1 < session.order.length ? 'つぎの人へ' : '結果発表へ！';
+  $('btn-result-next').textContent = session.online ? 'ランキングを見る'
+    : session.idx + 1 < session.order.length ? 'つぎの人へ' : '結果発表へ！';
   showScreen('result');
 
   // スコアのカウントアップ → ランク表示
@@ -1485,8 +1866,9 @@ function showResult(r, wasKaraoke) {
 // ----- 結果発表 -----
 let revealTimers = [];
 
-function showRanking() {
-  const ranked = session.results.slice().sort((a, b) => b.score - a.score);
+// entries: [{ spriteId, name, score, letter, me }] を点数順に並べたもの
+function showRanking(entries) {
+  const ranked = entries.slice().sort((a, b) => b.score - a.score);
   const n = ranked.length;
   const podium = $('podium'), list = $('rank-list');
   podium.textContent = '';
@@ -1497,11 +1879,10 @@ function showRanking() {
   [[1, 'p2'], [0, 'p1'], [2, 'p3']].forEach(([i, cls]) => {
     const r = ranked[i];
     if (!r) return;
-    const p = playerById(r.id);
     const col = document.createElement('div');
     col.className = 'col ' + cls;
-    col.appendChild(avatarCanvas(r.id, i === 0 ? 92 : 70, i === 0 ? { crown: true, sparkle: true } : {}));
-    const nm = document.createElement('div'); nm.className = 'pname'; nm.textContent = p ? p.name : '';
+    col.appendChild(avatarCanvas(r.spriteId, i === 0 ? 92 : 70, i === 0 ? { crown: true, sparkle: true } : {}));
+    const nm = document.createElement('div'); nm.className = 'pname'; nm.textContent = r.name;
     const sc = document.createElement('div'); sc.className = 'pscore'; sc.textContent = r.score.toLocaleString();
     const bl = document.createElement('div'); bl.className = 'block'; bl.textContent = String(i + 1);
     col.append(nm, sc, bl);
@@ -1510,12 +1891,11 @@ function showRanking() {
   });
 
   ranked.forEach((r, i) => {
-    const p = playerById(r.id);
     const item = document.createElement('div');
-    item.className = 'rank-item';
+    item.className = 'rank-item' + (r.me ? ' me' : '');
     const no = document.createElement('div'); no.className = 'no'; no.textContent = String(i + 1);
-    const av = avatarCanvas(r.id, 34, n >= 3 && i === n - 1 ? { tears: true } : i === 0 ? { crown: true } : {});
-    const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = p ? p.name : '';
+    const av = avatarCanvas(r.spriteId, 34, n >= 3 && i === n - 1 ? { tears: true } : i === 0 ? { crown: true } : {});
+    const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = r.name;
     const sc = document.createElement('div'); sc.className = 'sc'; sc.textContent = r.score.toLocaleString();
     const lt = document.createElement('div'); lt.className = 'lt'; lt.textContent = r.letter;
     item.append(no, av, nm, sc, lt);
@@ -1534,6 +1914,15 @@ function showRanking() {
     if (i === 0) { sfx.fanfare(); startConfetti(); } else sfx.reveal();
   }));
   at(firstAt + 0.9, () => { list.style.visibility = 'visible'; });
+}
+
+// スマホ1台を回して遊んだときの結果発表
+function showLocalRanking() {
+  $('btn-rank-title').textContent = 'タイトルへ';
+  showRanking(session.results.map((r) => {
+    const p = playerById(r.id);
+    return { spriteId: r.id, name: p ? p.name : '', score: r.score, letter: r.letter };
+  }));
 }
 
 // ---------------------------------------------------------------
@@ -1876,7 +2265,7 @@ function bindAll() {
   on('btn-setup-next', () => {
     const t = state.settings;
     // 全員おなじ曲のときは、始める前に1曲えらんでおく
-    if (t.mode === 'track' && t.songPick === 'same' && !track.current) openSong(beginSession);
+    if (t.mode === 'track' && t.songPick === 'same' && !track.current) openSong(beginSession, 'setup');
     else beginSession();
   });
 
@@ -1884,7 +2273,9 @@ function bindAll() {
   on('btn-song-search', doSearch);
   on('btn-song-back', () => {
     track.onPicked = null;
-    if (session) showNext();
+    if (track.backTo === 'round') openRound();
+    else if (track.backTo === 'cloud') openCloudSetup();
+    else if (session) showNext();
     else showScreen('setup');
   });
   $('song-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
@@ -1946,12 +2337,60 @@ function bindAll() {
   // 結果
   on('btn-result-next', () => {
     cancelAnimationFrame(resultTimer);
+    if (session.online) { finishOnline(); return; }
     session.idx++;
     if (session.idx < session.order.length) showNext();
-    else showRanking();
+    else showLocalRanking();
   });
-  on('btn-rank-again', () => { revealTimers.forEach(clearTimeout); beginSession(); });
-  on('btn-rank-title', () => { revealTimers.forEach(clearTimeout); session = null; showTitle(); });
+  on('btn-rank-again', () => {
+    revealTimers.forEach(clearTimeout);
+    if (session && session.online) startOnlineTurn();
+    else beginSession();
+  });
+  on('btn-rank-title', () => {
+    revealTimers.forEach(clearTimeout);
+    const wasOnline = session && session.online;
+    session = null;
+    if (wasOnline) openRound();
+    else showTitle();
+  });
+
+  // みんなでランキング
+  on('btn-online', () => {
+    if (!cloudUrlOk(state.cloud.endpoint)) openCloudSetup();
+    else if (cloud.round && !cloud.isHost) openRound();
+    else openCloudSetup();
+  });
+  on('btn-cloud-test', cloudTest);
+  on('btn-cloud-back', showTitle);
+  on('btn-cloud-next', () => {
+    const u = $('cloud-url').value.trim();
+    if (!cloudUrlOk(u)) { $('cloud-status').textContent = '× script.google.com の https から始まるURLを貼ってください'; return; }
+    state.cloud.endpoint = u;
+    saveState();
+    openSong(createRound, 'cloud');
+  });
+  on('btn-round-play', startOnlineTurn);
+  on('btn-round-song', () => openSong(createRound, 'round'));
+  on('btn-round-back', () => { showTitle(); });
+  on('btn-round-refresh', () => {
+    $('round-status').textContent = 'ランキングを取り寄せています…';
+    cloudRefresh().then(() => {
+      $('round-status').textContent = cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+      renderRound();
+    }, () => { $('round-status').textContent = 'ランキングを取り寄せられませんでした。通信を確かめてね'; });
+  });
+  on('btn-round-link', async () => {
+    const link = makeRoundLink();
+    $('round-status').textContent = await copyText(link)
+      ? 'お題リンクをコピーしました。LINEなどに貼って配ってね'
+      : 'コピーできませんでした。アドレス欄のURLをそのまま送ってね';
+  });
+  $('round-me').addEventListener('click', () => {
+    sfx.click();
+    afterEdit = (p) => { state.cloud.me = p.id; saveState(); renderRound(); };
+    openEdit(playerById(state.cloud.me) || null);
+  });
 
   // レーンのタップ (マルチタッチ対応)
   stage.addEventListener('pointerdown', (e) => {
@@ -1991,8 +2430,26 @@ function bindAll() {
 // 起動
 // ---------------------------------------------------------------
 loadState();
+// お題リンクから開かれたときは、その曲とむずかしさで始める
+const roundLink = readRoundLink();
+if (roundLink) {
+  state.cloud.endpoint = roundLink.endpoint;
+  cloud.room = roundLink.room;
+  cloud.round = { track: roundLink.track, diff: roundLink.diff };
+  cloud.isHost = false;
+} else if (state.cloud.room && state.cloud.round) {
+  cloud.room = state.cloud.room;
+  cloud.round = state.cloud.round;
+  cloud.isHost = !!state.cloud.isHost;
+}
+if (!state.cloud.me && state.players.length === 1) state.cloud.me = state.players[0].id;
 resize();
 bindSetup();
 bindAll();
-Promise.all(state.players.map(buildSprite)).then(showTitle);
+// 「まだ登録していない人」用の顔
+const blankFace = buildSprite({ id: '__none', name: '？', photo: null, color: '#6b5f9c' });
+Promise.all(state.players.map(buildSprite).concat([blankFace])).then(() => {
+  if (roundLink) openRound();
+  else showTitle();
+});
 requestAnimationFrame(frame);

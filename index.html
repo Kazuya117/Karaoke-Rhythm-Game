@@ -146,6 +146,28 @@
   }
   .now-song img { width: 30px; height: 30px; border-radius: 6px; flex: none; }
   .now-song span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- みんなでランキング ---------- */
+  .field {
+    width: 100%; height: 46px; padding: 0 12px; margin-bottom: 8px;
+    border-radius: 12px; border: 2px solid var(--line);
+    background: rgba(0, 0, 0, 0.35); color: #fff; font-size: 14px;
+  }
+  .card { display: flex; align-items: center; gap: 12px; width: 100%; }
+  .card img { width: 56px; height: 56px; border-radius: 10px; flex: none; background: #000; }
+  .card .t { flex: 1; min-width: 0; }
+  .card .t b { display: block; font-size: 16px; }
+  .card .t span { display: block; font-size: 12px; color: var(--sub); }
+  .card .t b, .card .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .me-row { display: flex; align-items: center; gap: 12px; width: 100%; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+  .me-row .t { flex: 1; min-width: 0; }
+  .me-row .t b { display: block; font-size: 17px; }
+  .me-row .t span { display: block; font-size: 12px; color: var(--sub); }
+  details.panel summary { cursor: pointer; font-size: 14px; font-weight: bold; }
+  details.panel ol { margin: 10px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.9; color: var(--sub); }
+  details.panel code { background: rgba(0, 0, 0, 0.4); border-radius: 4px; padding: 1px 5px; font-size: 12px; word-break: break-all; }
+  .rank-item.me { border-color: var(--pink); background: rgba(255, 79, 163, 0.2); }
+  .rank-item .at { font-size: 11px; color: var(--sub); }
   .seg.col button { text-align: left; padding: 10px 14px; }
 
   .check { display: flex; align-items: center; gap: 10px; font-size: 14px; padding: 6px 0; }
@@ -306,6 +328,7 @@
     <p class="lead">流れてくる仲間の顔を<br>リズムに合わせてタップ！</p>
     <div class="spacer"></div>
     <button id="btn-start" class="btn big">あそぶ</button>
+    <button id="btn-online" class="btn sub" style="max-width:320px">みんなでランキング</button>
     <p class="note">🔒 写真はこのスマホの中だけに保存されます<br>（どこにも送信されません）</p>
   </section>
 
@@ -399,6 +422,65 @@
       <button id="btn-tempo-reset" class="btn ghost">リセット</button>
     </div>
     <button id="btn-tempo-go" class="btn big">このテンポでスタート</button>
+  </section>
+
+  <!-- みんなでランキング: 集計の準備 (幹事だけ) -->
+  <section id="scr-cloud" class="screen">
+    <h2>お題を作る</h2>
+    <p class="sub">曲と難しさを決めてリンクを配ると、<br>みんなが自分のスマホで遊べます</p>
+    <div class="panel">
+      <div class="label">集計用のURL（幹事だけが設定します）</div>
+      <input id="cloud-url" class="field" type="url" inputmode="url" autocomplete="off"
+             placeholder="https://script.google.com/macros/s/..../exec">
+      <button id="btn-cloud-test" class="btn sub">接続をテスト</button>
+      <p id="cloud-status" class="hint"></p>
+    </div>
+    <div class="panel">
+      <div class="label">お題のむずかしさ</div>
+      <div class="seg" id="seg-rdiff">
+        <button data-v="easy">かんたん</button>
+        <button data-v="normal">ふつう</button>
+        <button data-v="hard">むずかしい</button>
+      </div>
+    </div>
+    <details class="panel">
+      <summary>はじめての人へ：URLの作り方（初回だけ・10分）</summary>
+      <ol>
+        <li>Googleドライブで新しい<b>スプレッドシート</b>を作ります</li>
+        <li>メニューの「拡張機能」→「Apps Script」を開きます</li>
+        <li>リポジトリの <code>server/code.gs</code> の中身を全部貼り付けて保存します</li>
+        <li>右上の「デプロイ」→「新しいデプロイ」→ 種類は<b>ウェブアプリ</b></li>
+        <li>「次のユーザーとして実行」は<b>自分</b>、「アクセスできるユーザー」は<b>全員</b>にします</li>
+        <li>出てきた <code>https://script.google.com/macros/s/.../exec</code> を上の欄に貼ります</li>
+      </ol>
+    </details>
+    <div class="spacer"></div>
+    <p class="note">このURLを知っている人は誰でも書き込めます。仲間内だけで共有してください。</p>
+    <div class="row">
+      <button id="btn-cloud-back" class="btn ghost">もどる</button>
+      <button id="btn-cloud-next" class="btn">曲をえらぶ</button>
+    </div>
+  </section>
+
+  <!-- みんなでランキング: お題 -->
+  <section id="scr-round" class="screen">
+    <h2>みんなでランキング</h2>
+    <div class="panel" id="round-song"></div>
+    <div class="panel">
+      <button class="me-row" id="round-me"></button>
+    </div>
+    <button id="btn-round-play" class="btn big">プレイする</button>
+    <p id="round-status" class="sub"></p>
+    <div id="round-rank" class="rank-list"></div>
+    <div class="spacer"></div>
+    <div class="row">
+      <button id="btn-round-link" class="btn sub">お題リンクをコピー</button>
+      <button id="btn-round-refresh" class="btn sub">ランキング更新</button>
+    </div>
+    <div class="row">
+      <button id="btn-round-song" class="btn ghost">お題の曲をかえる</button>
+      <button id="btn-round-back" class="btn ghost">タイトルへ</button>
+    </div>
   </section>
 
   <!-- 曲さがし -->
