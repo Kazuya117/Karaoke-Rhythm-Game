@@ -6,7 +6,17 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23c';
+const VERSION = '2026-09-23d';
+
+// LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
+// 古いまま動いていることがあるので、その可能性を伝えられるようにする
+function inAppBrowser() {
+  const ua = navigator.userAgent || '';
+  if (/Line\//i.test(ua)) return 'LINE';
+  if (/FBAN|FBAV|Instagram/i.test(ua)) return 'SNSアプリ';
+  if (/iPhone|iPad|iPod/.test(ua) && !/Safari/.test(ua)) return 'アプリ内';
+  return '';
+}
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1170,6 +1180,12 @@ function bindSetup() {
 
 // ----- 曲さがし画面 -----
 function openSong(after, backTo) {
+  const note = $('song-note');
+  if (note) {
+    const app = inAppBrowser();
+    note.textContent = '検索した言葉は Apple の検索サービスに送られます ・ ver ' + VERSION
+      + (app ? ' ／ ' + app + 'の画面で開いています。うまく動かないときは Safari で開き直してね' : '');
+  }
   track.onPicked = after;
   track.backTo = backTo || 'setup';
   $('song-status').textContent = '';
