@@ -1194,6 +1194,7 @@ const cloud = {
   room: '',       // お題のID
   round: null,    // { track, diff }
   entries: [],    // 取り寄せたスコア
+  serverOld: false,   // スプレッドシート側のコードが古いとき
   pending: null,  // 送信中の処理
   isHost: false,
 };
@@ -1384,6 +1385,8 @@ async function cloudRetry() {
 async function cloudRefresh() {
   await cloudRetry();
   const j = await cloudGet(cloud.room);
+  // 新しいコードなら round を必ず返す。無ければ古いまま動いている
+  cloud.serverOld = !('round' in j);
   if (!cloud.round) {
     cloud.round = roundFromServer(j.round);
     if (cloud.round) rememberRound();
@@ -1416,8 +1419,15 @@ function openRound() {
   if (!cloud.room) return;
   $('round-status').textContent = cloud.round ? 'ランキングを取り寄せています…' : 'お題を取り寄せています…';
   cloudRefresh().then(() => {
-    $('round-status').textContent = !cloud.round ? 'このお題は見つかりませんでした'
-      : cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+    $('round-status').textContent = cloud.serverOld
+      ? (cloud.isHost
+        ? '集計用のコードが古いままです。Apps Script を新しくしてデプロイし直してね'
+        : '集計用のコードが古いようです。幹事に Apps Script の更新をお願いしてね')
+      : !cloud.round
+        ? (cloud.isHost
+          ? 'お題が登録されていません。「ランキング更新」を押すと登録し直します'
+          : 'このお題は見つかりませんでした。幹事に新しいリンクをもらってね')
+        : cloud.entries.length ? '' : 'まだ誰も遊んでいません';
     renderRound();
   }, () => {
     $('round-status').textContent = cloud.round
@@ -1509,6 +1519,7 @@ async function postRound() {
     song: t.name, artist: t.artist, art: t.art, url: t.url,
   });
   const j = await cloudGet(cloud.room);
+  cloud.serverOld = !('round' in j);
   return !!(j.round && j.round.url);
 }
 
@@ -1524,7 +1535,9 @@ async function createRound() {
   try {
     $('round-status').textContent = await postRound()
       ? 'お題ができました。「お題リンクをコピー」して配ってね'
-      : 'お題を登録できませんでした。「ランキング更新」でやり直せます';
+      : cloud.serverOld
+        ? '集計用のコードが古いままです。Apps Script を新しくしてデプロイし直してね'
+        : 'お題を登録できませんでした。「ランキング更新」でやり直せます';
   } catch (e) {
     $('round-status').textContent = 'お題を登録できませんでした。通信を確かめてね';
   }
