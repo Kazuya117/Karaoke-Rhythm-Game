@@ -1220,22 +1220,44 @@ function b64urlDec(str) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function makeRoundLink() {
-  const t = cloud.round.track;
-  const payload = {
-    e: state.cloud.endpoint, r: cloud.room, d: cloud.round.diff,
-    t: { u: t.url, n: t.name, a: t.artist, c: t.art },
-  };
-  return location.origin + location.pathname + '#p=' + b64urlEnc(payload);
+// Apps Script のURLは決まった形なので、真ん中のIDだけをリンクに入れる
+const EXEC_HEAD = 'https://script.google.com/macros/s/';
+const EXEC_TAIL = '/exec';
+
+function endpointToId(u) {
+  if (!u.startsWith(EXEC_HEAD) || !u.endsWith(EXEC_TAIL)) return null;
+  const id = u.slice(EXEC_HEAD.length, -EXEC_TAIL.length);
+  return /^[A-Za-z0-9_-]{10,200}$/.test(id) ? id : null;
 }
 
+function makeRoundLink() {
+  const base = location.origin + location.pathname;
+  const id = endpointToId(state.cloud.endpoint);
+  if (id) return `${base}#e=${id}&r=${cloud.room}`;
+  // 見慣れない形のURLのときは、これまでどおりまるごと入れる
+  const t = cloud.round.track;
+  return base + '#p=' + b64urlEnc({
+    e: state.cloud.endpoint, r: cloud.room, d: cloud.round.diff,
+    t: { u: t.url, n: t.name, a: t.artist, c: t.art },
+  });
+}
+
+// お題の中身はスプレッドシートから取り寄せるので、リンクにはIDだけが入る
 function readRoundLink() {
-  const m = /[#&]p=([A-Za-z0-9_-]+)/.exec(location.hash || '');
-  if (!m) return null;
+  const h = location.hash || '';
+  const m = /[#&]e=([A-Za-z0-9_-]{10,200})(?:&|$)/.exec(h);
+  const r = /[#&]r=([A-Za-z0-9]{3,20})(?:&|$)/.exec(h);
+  if (m && r) {
+    const endpoint = EXEC_HEAD + m[1] + EXEC_TAIL;
+    if (!cloudUrlOk(endpoint)) return null;
+    return { endpoint, room: r[1], diff: null, track: null };
+  }
+  // 以前の形のリンク (お題の中身が入っているもの)
+  const p = /[#&]p=([A-Za-z0-9_-]+)/.exec(h);
+  if (!p) return null;
   try {
-    const d = b64urlDec(m[1]);
+    const d = b64urlDec(p[1]);
     if (!d || !cloudUrlOk(d.e) || !d.r || !d.t || !d.t.u) return null;
-    // 曲は Apple の試聴音源だけを受け付ける
     if (!/^https:\/\/[\w.-]*\.apple\.com\//.test(d.t.u)) return null;
     return {
       endpoint: d.e,
@@ -1249,7 +1271,19 @@ function readRoundLink() {
   } catch (e) { return null; }
 }
 
-const newRoomCode = () => Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 5);
+// スプレッドシートから受け取ったお題を、ゲームで使う形にする
+function roundFromServer(r) {
+  if (!r || !r.url || !/^https:\/\/[\w.-]*\.apple\.com\//.test(r.url)) return null;
+  return {
+    track: {
+      id: r.url, name: String(r.song || '曲'), artist: String(r.artist || ''),
+      art: /^https:\/\//.test(r.art || '') ? r.art : '', url: r.url,
+    },
+    diff: DIFF_LABEL[r.diff] ? r.diff : 'normal',
+  };
+}
+
+const newRoomCode = () => (Math.random().toString(36) + '00000').slice(2, 8);
 
 async function cloudGet(room) {
   const base = state.cloud.endpoint;
@@ -1350,6 +1384,12 @@ async function cloudRetry() {
 async function cloudRefresh() {
   await cloudRetry();
   const j = await cloudGet(cloud.room);
+  if (!cloud.round) {
+    cloud.round = roundFromServer(j.round);
+    if (cloud.round) rememberRound();
+  } else if (cloud.isHost && !(j.round && j.round.url)) {
+    await postRound();   // 登録できていなかったぶんを送り直す
+  }
   cloud.entries = j.entries || [];
   const added = importMembers(j.members);
   if (added.length) await Promise.all(added.map(buildSprite));
@@ -1374,16 +1414,27 @@ function openRound() {
   renderRound();
   showScreen('round');
   if (!cloud.room) return;
-  $('round-status').textContent = 'ランキングを取り寄せています…';
+  $('round-status').textContent = cloud.round ? 'ランキングを取り寄せています…' : 'お題を取り寄せています…';
   cloudRefresh().then(() => {
-    $('round-status').textContent = cloud.entries.length ? '' : 'まだ誰も遊んでいません';
+    $('round-status').textContent = !cloud.round ? 'このお題は見つかりませんでした'
+      : cloud.entries.length ? '' : 'まだ誰も遊んでいません';
     renderRound();
-  }, () => { $('round-status').textContent = 'ランキングを取り寄せられませんでした。通信を確かめてね'; });
+  }, () => {
+    $('round-status').textContent = cloud.round
+      ? 'ランキングを取り寄せられませんでした。通信を確かめてね'
+      : 'お題を取り寄せられませんでした。通信を確かめてね';
+  });
 }
 
 function renderRound() {
   const box = $('round-song');
   box.textContent = '';
+  if (!cloud.round) {
+    const w = document.createElement('div');
+    w.className = 'sub';
+    w.textContent = 'お題を読み込んでいます…';
+    box.appendChild(w);
+  }
   if (cloud.round) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -1450,13 +1501,33 @@ function newMe() {
   openEdit(null);
 }
 
-function createRound() {
+// お題の中身はスプレッドシートに置く (配るリンクを短くするため)
+async function postRound() {
+  const t = cloud.round.track;
+  await cloudPost({
+    type: 'round', room: cloud.room, diff: cloud.round.diff,
+    song: t.name, artist: t.artist, art: t.art, url: t.url,
+  });
+  const j = await cloudGet(cloud.room);
+  return !!(j.round && j.round.url);
+}
+
+async function createRound() {
   cloud.room = newRoomCode();
   cloud.round = { track: track.current, diff: state.settings.diff };
   cloud.entries = [];
   cloud.isHost = true;
   rememberRound();
-  openRound();
+  renderRound();
+  showScreen('round');
+  $('round-status').textContent = 'お題を用意しています…';
+  try {
+    $('round-status').textContent = await postRound()
+      ? 'お題ができました。「お題リンクをコピー」して配ってね'
+      : 'お題を登録できませんでした。「ランキング更新」でやり直せます';
+  } catch (e) {
+    $('round-status').textContent = 'お題を登録できませんでした。通信を確かめてね';
+  }
 }
 
 function rememberRound() {
@@ -2540,7 +2611,8 @@ const roundLink = readRoundLink();
 if (roundLink) {
   state.cloud.endpoint = roundLink.endpoint;
   cloud.room = roundLink.room;
-  cloud.round = { track: roundLink.track, diff: roundLink.diff };
+  // 短いリンクのときは、お題の中身はあとから取り寄せる
+  cloud.round = roundLink.track ? { track: roundLink.track, diff: roundLink.diff } : null;
   cloud.isHost = false;
 } else if (state.cloud.room && state.cloud.round) {
   cloud.room = state.cloud.room;

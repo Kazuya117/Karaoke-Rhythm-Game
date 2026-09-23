@@ -8,6 +8,9 @@
  *   GET  ?room=XXXX            … そのお題のランキングと、メンバー一覧を返す
  *   POST {type:'score', ...}   … スコアを記録する (同じ人はベストスコアだけ残す)
  *   POST {type:'members', ...} … メンバー(名前と似顔絵)を登録する
+ *   POST {type:'round', ...}   … お題(曲とむずかしさ)を登録する
+ *
+ * お題をここに置くことで、配るリンクを短くしています。
  *
  * メンバーの似顔絵は、このスプレッドシートの中だけに入ります。
  * リンクを知っている仲間にだけ配られ、インターネットには公開されません。
@@ -19,6 +22,8 @@
 var SHEET_NAME = 'scores';
 var MEMBER_SHEET = 'members';
 var MEMBER_HEADERS = ['memberId', 'name', 'avatar', 'updatedAt'];
+var ROUND_SHEET = 'rounds';
+var ROUND_HEADERS = ['room', 'song', 'artist', 'art', 'url', 'diff', 'createdAt'];
 var HEADERS = ['room', 'playerId', 'name', 'score', 'letter',
   'perfect', 'great', 'good', 'miss', 'maxCombo', 'attempts',
   'song', 'diff', 'updatedAt', 'avatar'];
@@ -28,7 +33,10 @@ function doGet(e) {
   try {
     var room = String((e && e.parameter && e.parameter.room) || '').trim();
     if (!room) return out({ ok: true, ping: true, message: 'ready' });
-    return out({ ok: true, room: room, entries: readRoom(room), members: readMembers() });
+    return out({
+      ok: true, room: room, round: readRound(room),
+      entries: readRoom(room), members: readMembers(),
+    });
   } catch (err) {
     return out({ ok: false, error: String(err) });
   }
@@ -42,6 +50,10 @@ function doPost(e) {
     if (body.type === 'members') {
       lock.waitLock(20000);
       return out({ ok: true, members: writeMembers(body.list || []) });
+    }
+    if (body.type === 'round') {
+      lock.waitLock(20000);
+      return out({ ok: true, round: writeRound(body) });
     }
     if (body.type !== 'score') return out({ ok: false, error: 'unknown type' });
 
@@ -102,6 +114,61 @@ function doPost(e) {
   }
 }
 
+// ----- お題 (曲とむずかしさ) -----
+function readRound(room) {
+  var rows = getRoundSheet().getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) !== room) continue;
+    return {
+      song: String(rows[i][1]), artist: String(rows[i][2]),
+      art: String(rows[i][3]), url: String(rows[i][4]), diff: String(rows[i][5]),
+    };
+  }
+  return null;
+}
+
+function writeRound(body) {
+  var room = String(body.room || '').trim();
+  if (!room) return null;
+  var sheet = getRoundSheet();
+  var rows = sheet.getDataRange().getValues();
+  var row = [
+    room,
+    String(body.song || '').slice(0, 120),
+    String(body.artist || '').slice(0, 120),
+    String(body.art || '').slice(0, 300),
+    String(body.url || '').slice(0, 400),
+    String(body.diff || 'normal').slice(0, 12),
+    new Date(),
+  ];
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === room) {
+      sheet.getRange(i + 1, 1, 1, ROUND_HEADERS.length).setValues([row]);
+      return readRound(room);
+    }
+  }
+  sheet.appendRow(row);
+  return readRound(room);
+}
+
+function getRoundSheet() {
+  return getOrCreate(ROUND_SHEET, ROUND_HEADERS);
+}
+
+function getOrCreate(name, headers) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
 // ----- メンバー (名前と似顔絵) -----
 function readMembers() {
   var sheet = getMemberSheet();
@@ -140,17 +207,7 @@ function writeMembers(list) {
 }
 
 function getMemberSheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(MEMBER_SHEET);
-  if (!sheet) {
-    sheet = ss.insertSheet(MEMBER_SHEET);
-    sheet.appendRow(MEMBER_HEADERS);
-    sheet.setFrozenRows(1);
-  } else if (sheet.getLastRow() === 0) {
-    sheet.appendRow(MEMBER_HEADERS);
-    sheet.setFrozenRows(1);
-  }
-  return sheet;
+  return getOrCreate(MEMBER_SHEET, MEMBER_HEADERS);
 }
 
 function readRoom(room) {
