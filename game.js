@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23f';
+const VERSION = '2026-09-23g';
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
 // 古いまま動いていることがあるので、その可能性を伝えられるようにする
@@ -503,7 +503,13 @@ async function searchTracks(term) {
   if (cloudUrlOk(state.cloud.endpoint)) {
     try {
       return (await searchViaCloud(term)).map(toTrack);
-    } catch (e) { note('中継', e); }
+    } catch (e) {
+      // Google の権限エラーは長いので、やることだけ伝える
+      const m = (e && e.message) || '';
+      if (/UrlFetchApp|external_request/.test(m)) {
+        why.push('中継=Apps Script で authorize を1回実行して、外部サイトへの接続を許可してね');
+      } else note('中継', e);
+    }
   } else {
     why.push('中継=集計用のURLが未設定');
   }

@@ -117,6 +117,18 @@ function doPost(e) {
   }
 }
 
+/**
+ * 外部サイトへの接続を許可するための関数。
+ *
+ * エディタ上部の関数一覧で「authorize」を選んで「実行」を1回押し、
+ * 出てくる画面で許可してください。これをしないと中継が使えません。
+ */
+function authorize() {
+  var res = UrlFetchApp.fetch('https://itunes.apple.com/search?term=test&limit=1', { muteHttpExceptions: true });
+  Logger.log('つながりました: ' + res.getResponseCode());
+  return res.getResponseCode();
+}
+
 // ----- 曲の検索を中継する -----
 // LINE のアプリ内ブラウザなど、Apple に直接つながらない環境のための逃げ道。
 // ここ (Google のサーバー) から取りに行って、結果だけ返す。
