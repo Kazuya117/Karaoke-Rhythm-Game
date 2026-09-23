@@ -129,6 +129,13 @@
   }
   .search-row .btn { flex: 0 0 84px; height: 48px; padding: 0; font-size: 15px; }
   .song-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  #net-result {
+    display: none; width: 100%; margin: 0; padding: 10px 12px;
+    background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); border-radius: 12px;
+    color: var(--sub); font-size: 12px; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-all; user-select: text; -webkit-user-select: text;
+  }
+  #net-result.on { display: block; }
   .song-item {
     display: flex; align-items: center; gap: 10px; width: 100%;
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
@@ -495,6 +502,8 @@
       <button id="btn-song-search" class="btn">検索</button>
     </div>
     <p id="song-status" class="sub"></p>
+    <button id="btn-net-check" class="btn ghost" style="display:none">つながりを調べる</button>
+    <pre id="net-result"></pre>
     <div id="song-list" class="song-list"></div>
     <div class="spacer"></div>
     <p class="note" id="song-note">検索した言葉は Apple の検索サービスに送られます</p>
@@ -596,7 +605,7 @@
 </div>
 <input type="file" id="file" accept="image/*" hidden>
 <input type="file" id="file-members" accept="application/json,.json" hidden>
-<script src="beat.js?v=4"></script>
-<script src="game.js?v=4"></script>
+<script src="beat.js?v=5"></script>
+<script src="game.js?v=5"></script>
 </body>
 </html>

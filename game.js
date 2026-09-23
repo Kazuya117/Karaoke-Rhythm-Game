@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23d';
+const VERSION = '2026-09-23e';
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
 // 古いまま動いていることがあるので、その可能性を伝えられるようにする
@@ -1178,8 +1178,92 @@ function bindSetup() {
   refreshSetup();
 }
 
+
+// ---------------------------------------------------------------
+// つながりを調べる
+//   どこまで届いてどこで止まっているかを、その場で確かめられるようにする
+// ---------------------------------------------------------------
+const SEARCH_BASE = 'https://itunes.apple.com/search?media=music&entity=song&limit=1&country=JP&term=';
+
+async function netCheck() {
+  const box = $('net-result');
+  const lines = [];
+  const show = () => { box.textContent = lines.join('\n'); box.classList.add('on'); };
+  const step = async (name, fn) => {
+    lines.push('… ' + name);
+    show();
+    const t0 = Date.now();
+    try {
+      const r = await fn();
+      lines[lines.length - 1] = '○ ' + name + (r ? '  ' + r : '') + '  ' + (Date.now() - t0) + 'ms';
+    } catch (e) {
+      lines[lines.length - 1] = '× ' + name + '  ' + ((e && e.message) || e);
+    }
+    show();
+    return lines[lines.length - 1][0] === '○';
+  };
+
+  const ua = navigator.userAgent || '';
+  lines.push('ver ' + VERSION);
+  lines.push('ブラウザ ' + (inAppBrowser() || 'ふつう'));
+  lines.push('オンライン ' + (navigator.onLine ? 'はい' : 'いいえ'));
+  lines.push(ua.slice(-70));
+  lines.push('');
+  show();
+
+  let found = null;
+  await step('検索API（直接）', async () => {
+    const r = await fetch(SEARCH_BASE + encodeURIComponent('Lemon'));
+    if (!r.ok) throw new Error('status ' + r.status);
+    const j = await r.json();
+    found = found || (j.results || [])[0];
+    return j.resultCount + '件';
+  });
+  await step('検索API（JSONP）', async () => {
+    const j = await jsonp(SEARCH_BASE + encodeURIComponent('Lemon'), 10000);
+    found = found || (j.results || [])[0];
+    return j.resultCount + '件';
+  });
+
+  if (found && found.artworkUrl100) {
+    await step('ジャケット画像', () => new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img.naturalWidth + 'px');
+      img.onerror = () => rej(new Error('読み込めません'));
+      img.src = found.artworkUrl100;
+    }));
+  }
+  if (found && found.previewUrl) {
+    await step('音源のダウンロード', async () => {
+      const r = await fetch(found.previewUrl);
+      if (!r.ok) throw new Error('status ' + r.status);
+      const b = await r.arrayBuffer();
+      return Math.round(b.byteLength / 1024) + 'KB';
+    });
+  } else {
+    lines.push('（曲が見つからないので、音源の確認は省略）');
+    show();
+  }
+
+  if (cloudUrlOk(state.cloud.endpoint)) {
+    await step('集計用のURL', async () => {
+      const r = await fetch(state.cloud.endpoint + '?room=&t=' + Date.now());
+      if (!r.ok) throw new Error('status ' + r.status);
+      await r.json();
+      return 'OK';
+    });
+  }
+
+  lines.push('');
+  lines.push('この内容をそのまま送ってください');
+  show();
+}
+
 // ----- 曲さがし画面 -----
 function openSong(after, backTo) {
+  $('btn-net-check').style.display = 'none';
+  $('net-result').textContent = '';
+  $('net-result').classList.remove('on');
   const note = $('song-note');
   if (note) {
     const app = inAppBrowser();
@@ -1235,6 +1319,7 @@ async function doSearch() {
   } catch (e) {
     $('song-status').textContent = '検索できませんでした。通信を確かめてね（'
       + (e && e.message ? e.message : e) + '）';
+    $('btn-net-check').style.display = 'block';
   }
 }
 
@@ -2544,6 +2629,7 @@ function bindAll() {
 
   // 曲さがし
   on('btn-song-search', doSearch);
+  on('btn-net-check', netCheck);
   on('btn-song-back', () => {
     track.onPicked = null;
     if (track.backTo === 'round') openRound();
