@@ -6,6 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
+const VERSION = '2026-09-23c';
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -427,12 +428,40 @@ const track = {
   busy: false,
 };
 
+// Safari など、直接読み取れない環境のための予備の取り方。
+// Apple の検索APIが用意している callback を使うので、CORS を通らずに済む
+function jsonp(url, ms) {
+  return new Promise((resolve, reject) => {
+    const cb = '__it' + Math.random().toString(36).slice(2, 10);
+    const el = document.createElement('script');
+    let done = false;
+    const finish = (fn, arg) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+      el.remove();
+      fn(arg);
+    };
+    const timer = setTimeout(() => finish(reject, new Error('時間切れ')), ms || 12000);
+    window[cb] = (data) => finish(resolve, data);
+    el.onerror = () => finish(reject, new Error('つながりません'));
+    el.src = url + '&callback=' + cb;
+    document.head.appendChild(el);
+  });
+}
+
 async function searchTracks(term) {
   const url = 'https://itunes.apple.com/search?media=music&entity=song&limit=20&country=JP&term=' + encodeURIComponent(term);
-  const r = await fetch(url);
-  if (!r.ok) throw new Error('search ' + r.status);
-  const j = await r.json();
-  return (j.results || []).filter((x) => x.previewUrl).map((x) => ({
+  let j = null;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('search ' + r.status);
+    j = await r.json();
+  } catch (e) {
+    j = await jsonp(url);   // ここで駄目なら、呼び出し元にそのまま伝える
+  }
+  return ((j && j.results) || []).filter((x) => x.previewUrl).map((x) => ({
     id: String(x.trackId),
     name: x.trackName,
     artist: x.artistName,
@@ -792,6 +821,9 @@ function bindSeg(id, get, set) {
 
 // ----- タイトル -----
 function showTitle() {
+  // 古い index.html が残っている端末でも落ちないようにする
+  const v = $('ver');
+  if (v) v.textContent = 'ver ' + VERSION;
   const row = $('title-faces');
   row.textContent = '';
   state.players.slice(0, 8).forEach((p) => row.appendChild(avatarCanvas(p.id, 44)));
