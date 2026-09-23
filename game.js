@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23e';
+const VERSION = '2026-09-23f';
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
 // 古いまま動いていることがあるので、その可能性を伝えられるようにする
@@ -461,23 +461,53 @@ function jsonp(url, ms) {
   });
 }
 
+const SEARCH_URL = 'https://itunes.apple.com/search?media=music&entity=song&limit=20&country=JP&term=';
+
+const toTrack = (x) => ({
+  id: String(x.trackId),
+  name: x.trackName,
+  artist: x.artistName,
+  art: x.artworkUrl100 || '',
+  url: x.previewUrl,
+});
+
+// 集計用のURL経由で取り寄せる。Apple に直接つながらない環境のための逃げ道
+async function searchViaCloud(term) {
+  const base = state.cloud.endpoint;
+  const r = await fetch(base + (base.includes('?') ? '&' : '?')
+    + 'q=' + encodeURIComponent(term) + '&t=' + Date.now());
+  if (!r.ok) throw new Error('status ' + r.status);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'error');
+  return j.results || [];
+}
+
+// 直接 → JSONP → 中継 の順に試す
 async function searchTracks(term) {
-  const url = 'https://itunes.apple.com/search?media=music&entity=song&limit=20&country=JP&term=' + encodeURIComponent(term);
-  let j = null;
+  const url = SEARCH_URL + encodeURIComponent(term);
+  const why = [];
+  const note = (label, e) => why.push(label + '=' + ((e && e.message) || e));
+
   try {
     const r = await fetch(url);
-    if (!r.ok) throw new Error('search ' + r.status);
-    j = await r.json();
-  } catch (e) {
-    j = await jsonp(url);   // ここで駄目なら、呼び出し元にそのまま伝える
+    if (!r.ok) throw new Error('status ' + r.status);
+    const j = await r.json();
+    return (j.results || []).filter((x) => x.previewUrl).map(toTrack);
+  } catch (e) { note('直接', e); }
+
+  try {
+    const j = await jsonp(url);
+    return ((j && j.results) || []).filter((x) => x.previewUrl).map(toTrack);
+  } catch (e) { note('JSONP', e); }
+
+  if (cloudUrlOk(state.cloud.endpoint)) {
+    try {
+      return (await searchViaCloud(term)).map(toTrack);
+    } catch (e) { note('中継', e); }
+  } else {
+    why.push('中継=集計用のURLが未設定');
   }
-  return ((j && j.results) || []).filter((x) => x.previewUrl).map((x) => ({
-    id: String(x.trackId),
-    name: x.trackName,
-    artist: x.artistName,
-    art: x.artworkUrl100 || '',
-    url: x.previewUrl,
-  }));
+  throw new Error(why.join(' / '));
 }
 
 // 解析した曲は 30秒でも 10MB 以上あるので、ためこみすぎるとスマホが苦しくなる
@@ -1183,7 +1213,7 @@ function bindSetup() {
 // つながりを調べる
 //   どこまで届いてどこで止まっているかを、その場で確かめられるようにする
 // ---------------------------------------------------------------
-const SEARCH_BASE = 'https://itunes.apple.com/search?media=music&entity=song&limit=1&country=JP&term=';
+const SEARCH_BASE = SEARCH_URL.replace('limit=20', 'limit=1');
 
 async function netCheck() {
   const box = $('net-result');
@@ -1224,6 +1254,14 @@ async function netCheck() {
     found = found || (j.results || [])[0];
     return j.resultCount + '件';
   });
+
+  if (cloudUrlOk(state.cloud.endpoint)) {
+    await step('検索API（中継）', async () => {
+      const list = await searchViaCloud('Lemon');
+      found = found || list[0];
+      return list.length + '件';
+    });
+  }
 
   if (found && found.artworkUrl100) {
     await step('ジャケット画像', () => new Promise((res, rej) => {
@@ -1341,8 +1379,10 @@ async function pickTrack(t, btn) {
     if (after) after();
   } catch (e) {
     track.busy = false;
+    const app = inAppBrowser();
     $('song-status').textContent = (e && e.message ? e.message : 'この曲は読み込めませんでした')
-      + ' / ほかの曲でもためしてみてね';
+      + (app ? ' / ' + app + 'の画面では読み込めないことがあります。Safari で開き直してみてね'
+        : ' / ほかの曲でもためしてみてね');
     document.querySelectorAll('.song-item').forEach((el) => {
       el.disabled = false;
       el.classList.remove('on');

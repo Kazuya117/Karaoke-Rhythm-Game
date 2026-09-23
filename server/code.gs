@@ -6,6 +6,7 @@
  *
  * 仕組み:
  *   GET  ?room=XXXX            … そのお題のランキングと、メンバー一覧を返す
+ *   GET  ?q=きょくめい          … 曲を検索する (ブラウザから Apple に直接つながらないとき用)
  *   POST {type:'score', ...}   … スコアを記録する (同じ人はベストスコアだけ残す)
  *   POST {type:'members', ...} … メンバー(名前と似顔絵)を登録する
  *   POST {type:'round', ...}   … お題(曲とむずかしさ)を登録する
@@ -31,6 +32,8 @@ var MAX_AVATAR = 40000;   // 1セルに入れられる上限に余裕を持た�
 
 function doGet(e) {
   try {
+    var q = String((e && e.parameter && e.parameter.q) || '').trim();
+    if (q) return out(searchITunes(q));
     var room = String((e && e.parameter && e.parameter.room) || '').trim();
     if (!room) return out({ ok: true, ping: true, message: 'ready' });
     return out({
@@ -111,6 +114,30 @@ function doPost(e) {
     return out({ ok: false, error: String(err) });
   } finally {
     try { lock.releaseLock(); } catch (ignore) {}
+  }
+}
+
+// ----- 曲の検索を中継する -----
+// LINE のアプリ内ブラウザなど、Apple に直接つながらない環境のための逃げ道。
+// ここ (Google のサーバー) から取りに行って、結果だけ返す。
+function searchITunes(term) {
+  var url = 'https://itunes.apple.com/search?media=music&entity=song&limit=20&country=JP&term='
+    + encodeURIComponent(term);
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return { ok: false, error: 'itunes ' + res.getResponseCode() };
+    var j = JSON.parse(res.getContentText());
+    var list = [];
+    (j.results || []).forEach(function (x) {
+      if (!x.previewUrl) return;
+      list.push({
+        trackId: x.trackId, trackName: x.trackName, artistName: x.artistName,
+        artworkUrl100: x.artworkUrl100, previewUrl: x.previewUrl,
+      });
+    });
+    return { ok: true, results: list, resultCount: list.length };
+  } catch (err) {
+    return { ok: false, error: String(err) };
   }
 }
 
