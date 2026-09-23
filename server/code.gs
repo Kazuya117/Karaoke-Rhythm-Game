@@ -5,14 +5,20 @@
  * デプロイします。手順は README.md の「みんなでランキングの準備」を見てください。
  *
  * 仕組み:
- *   GET  ?room=XXXX          … そのお題のランキングを返す
- *   POST {type:'score', ...} … スコアを記録する (同じ人はベストスコアだけ残す)
+ *   GET  ?room=XXXX            … そのお題のランキングと、メンバー一覧を返す
+ *   POST {type:'score', ...}   … スコアを記録する (同じ人はベストスコアだけ残す)
+ *   POST {type:'members', ...} … メンバー(名前と似顔絵)を登録する
+ *
+ * メンバーの似顔絵は、このスプレッドシートの中だけに入ります。
+ * リンクを知っている仲間にだけ配られ、インターネットには公開されません。
  *
  * ブラウザから呼べるように、POST は text/plain で受け取ります
  * (application/json だと事前確認の通信が入って、Apps Script では失敗するため)。
  */
 
 var SHEET_NAME = 'scores';
+var MEMBER_SHEET = 'members';
+var MEMBER_HEADERS = ['memberId', 'name', 'avatar', 'updatedAt'];
 var HEADERS = ['room', 'playerId', 'name', 'score', 'letter',
   'perfect', 'great', 'good', 'miss', 'maxCombo', 'attempts',
   'song', 'diff', 'updatedAt', 'avatar'];
@@ -22,7 +28,7 @@ function doGet(e) {
   try {
     var room = String((e && e.parameter && e.parameter.room) || '').trim();
     if (!room) return out({ ok: true, ping: true, message: 'ready' });
-    return out({ ok: true, room: room, entries: readRoom(room) });
+    return out({ ok: true, room: room, entries: readRoom(room), members: readMembers() });
   } catch (err) {
     return out({ ok: false, error: String(err) });
   }
@@ -33,6 +39,10 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     if (body.type === 'ping') return out({ ok: true, ping: true });
+    if (body.type === 'members') {
+      lock.waitLock(20000);
+      return out({ ok: true, members: writeMembers(body.list || []) });
+    }
     if (body.type !== 'score') return out({ ok: false, error: 'unknown type' });
 
     var room = String(body.room || '').trim();
@@ -90,6 +100,57 @@ function doPost(e) {
   } finally {
     try { lock.releaseLock(); } catch (ignore) {}
   }
+}
+
+// ----- メンバー (名前と似顔絵) -----
+function readMembers() {
+  var sheet = getMemberSheet();
+  var rows = sheet.getDataRange().getValues();
+  var list = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (!String(rows[i][0])) continue;
+    list.push({
+      memberId: String(rows[i][0]),
+      name: String(rows[i][1]),
+      avatar: String(rows[i][2] || ''),
+    });
+  }
+  return list;
+}
+
+// 幹事が配るたびに、まるごと置きかえる
+function writeMembers(list) {
+  var sheet = getMemberSheet();
+  var last = sheet.getLastRow();
+  if (last > 1) sheet.getRange(2, 1, last - 1, MEMBER_HEADERS.length).clearContent();
+  var now = new Date();
+  var rows = [];
+  for (var i = 0; i < Math.min(list.length, 30); i++) {
+    var m = list[i] || {};
+    var avatar = String(m.avatar || '');
+    rows.push([
+      String(m.memberId || ('m' + (i + 1))),
+      String(m.name || '').slice(0, 20),
+      avatar.length > MAX_AVATAR ? '' : avatar,
+      now,
+    ]);
+  }
+  if (rows.length) sheet.getRange(2, 1, rows.length, MEMBER_HEADERS.length).setValues(rows);
+  return readMembers();
+}
+
+function getMemberSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(MEMBER_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(MEMBER_SHEET);
+    sheet.appendRow(MEMBER_HEADERS);
+    sheet.setFrozenRows(1);
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(MEMBER_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
 }
 
 function readRoom(room) {

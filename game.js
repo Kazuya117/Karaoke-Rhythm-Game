@@ -767,6 +767,78 @@ function showTitle() {
   showScreen('title');
 }
 
+// 幹事が配ったメンバーを、この端末に取り込む。
+// 同じ名前の人がいれば増やさない (何度取り込んでも大丈夫)
+function importMembers(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  const added = [];
+  list.slice(0, 30).forEach((m, i) => {
+    const name = String((m && m.name) || '').slice(0, 8);
+    if (!name) return;
+    const photo = typeof m.avatar === 'string' && /^data:image\//.test(m.avatar) ? m.avatar
+      : typeof m.photo === 'string' && /^data:image\//.test(m.photo) ? m.photo : null;
+    const same = state.players.find((p) => p.name === name);
+    if (same) {
+      // 名前が同じ人は増やさない。写真がまだなければ、そこだけ埋める
+      if (!same.photo && photo) { same.photo = photo; added.push(same); }
+      return;
+    }
+    const p = {
+      id: 'p' + Date.now().toString(36) + i.toString(36) + Math.floor(Math.random() * 1e4).toString(36),
+      name, photo, color: AVATAR_COLORS[state.players.length % AVATAR_COLORS.length], active: true,
+    };
+    state.players.push(p);
+    added.push(p);
+  });
+  if (!added.length) return [];
+  if (!saveState()) toast('保存容量がいっぱいです。今回だけ使えます');
+  return added;
+}
+
+// 幹事の端末のメンバーを、スプレッドシートにアップロードして全員に配る
+async function shareMembers() {
+  const list = state.players.map((p) => ({ memberId: p.id, name: p.name, avatar: avatarData(p.id) }));
+  if (!list.length) { toast('先にメンバーを登録してね'); return; }
+  $('round-status').textContent = 'メンバーを配っています…';
+  try {
+    await cloudPost({ type: 'members', list });
+    const j = await cloudGet(cloud.room);
+    const n = (j.members || []).length;
+    $('round-status').textContent = n
+      ? `${n}人のメンバーを配りました。お題リンクを開いた人に自動で入ります`
+      : '配れませんでした。もう一度ためしてね';
+  } catch (e) {
+    $('round-status').textContent = 'メンバーを配れませんでした。通信を確かめてね';
+  }
+}
+
+// ----- あなたは誰？ -----
+function openWho() {
+  const box = $('who-list');
+  box.textContent = '';
+  for (const p of state.players) {
+    const row = document.createElement('button');
+    row.className = 'player p-main';
+    row.style.width = '100%';
+    row.appendChild(avatarCanvas(p.id, 44));
+    const t = document.createElement('div');
+    t.style.minWidth = '0';
+    const nm = document.createElement('div');
+    nm.className = 'p-name';
+    nm.textContent = p.name;
+    t.appendChild(nm);
+    row.appendChild(t);
+    row.addEventListener('click', () => {
+      state.cloud.me = p.id;
+      saveState();
+      $('modal-who').classList.remove('on');
+      renderRound();
+    });
+    box.appendChild(row);
+  }
+  $('modal-who').classList.add('on');
+}
+
 // ----- メンバー -----
 function renderPlayers() {
   const list = $('player-list');
@@ -1279,6 +1351,8 @@ async function cloudRefresh() {
   await cloudRetry();
   const j = await cloudGet(cloud.room);
   cloud.entries = j.entries || [];
+  const added = importMembers(j.members);
+  if (added.length) await Promise.all(added.map(buildSprite));
   await buildCloudSprites(cloud.entries);
   return cloud.entries;
 }
@@ -1339,13 +1413,15 @@ function renderRound() {
   const b = document.createElement('b');
   b.textContent = me ? me.name : 'あなたの名前を登録';
   const sp = document.createElement('span');
-  sp.textContent = me ? 'タップで名前と写真をかえる' : 'タップして名前と顔写真を登録しよう';
+  sp.textContent = me ? 'タップでえらび直す'
+    : state.players.length ? 'タップして、この中からえらぶ' : 'タップして名前と顔写真を登録しよう';
   t.append(b, sp);
   row.appendChild(t);
 
   $('btn-round-play').disabled = !me || !cloud.round;
   $('btn-round-song').style.display = cloud.isHost ? 'block' : 'none';
   $('btn-round-link').style.display = cloud.isHost ? 'block' : 'none';
+  $('btn-round-share-members').style.display = cloud.isHost ? 'block' : 'none';
 
   const list = $('round-rank');
   list.textContent = '';
@@ -1367,6 +1443,11 @@ function renderRound() {
     item.append(no, avatarCanvas('c:' + e.playerId, 34, i === 0 ? { crown: true } : {}), nm, sc, lt);
     list.appendChild(item);
   });
+}
+
+function newMe() {
+  afterEdit = (p) => { state.cloud.me = p.id; saveState(); renderRound(); };
+  openEdit(null);
 }
 
 function createRound() {
@@ -2388,9 +2469,33 @@ function bindAll() {
   });
   $('round-me').addEventListener('click', () => {
     sfx.click();
-    afterEdit = (p) => { state.cloud.me = p.id; saveState(); renderRound(); };
-    openEdit(playerById(state.cloud.me) || null);
+    // 登録済みの人がいれば、そこからえらぶ
+    if (state.players.length) openWho();
+    else newMe();
   });
+  on('btn-who-new', () => { $('modal-who').classList.remove('on'); newMe(); });
+  on('btn-round-share-members', shareMembers);
+  on('btn-import', () => $('file-members').click());
+  $('file-members').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = async () => {
+      let list = null;
+      try {
+        const d = JSON.parse(String(rd.result));
+        list = Array.isArray(d) ? d : d && Array.isArray(d.members) ? d.members : null;
+      } catch (err) { list = null; }
+      if (!list) { toast('このファイルは読み込めませんでした'); return; }
+      const added = importMembers(list);
+      await Promise.all(added.map(buildSprite));
+      renderPlayers();
+      toast(added.length ? `${added.length}人を読み込みました` : 'すでに登録済みのメンバーでした');
+    };
+    rd.readAsText(f);
+  });
+  on('btn-who-cancel', () => $('modal-who').classList.remove('on'));
 
   // レーンのタップ (マルチタッチ対応)
   stage.addEventListener('pointerdown', (e) => {
