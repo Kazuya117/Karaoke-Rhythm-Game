@@ -441,23 +441,54 @@ async function searchTracks(term) {
   }));
 }
 
+// 解析した曲は 30秒でも 10MB 以上あるので、ためこみすぎるとスマホが苦しくなる
+const TRACK_CACHE_MAX = 3;
+
 // 音源を読み込んで解析する。同じ曲の2回目はすぐ返る
 async function prepareTrack(t, onStep) {
   const hit = track.cache.get(t.url);
   if (hit) return hit;
+  initAudio();
+  if (!actx) throw new Error('この端末では音を鳴らせません');
+  // 着信やアプリ切り替えのあとは止まっていることがある
+  if (actx.state !== 'running') {
+    try { await actx.resume(); } catch (e) { /* 鳴らせなくても解析はできる */ }
+  }
+
   if (onStep) onStep('曲を読み込み中…');
-  const r = await fetch(t.url);
-  if (!r.ok) throw new Error('fetch ' + r.status);
+  let r;
+  try {
+    r = await fetch(t.url);
+  } catch (e) {
+    throw new Error('曲をダウンロードできませんでした（通信を確かめてね）');
+  }
+  if (!r.ok) throw new Error('曲をダウンロードできませんでした（' + r.status + '）');
   const bytes = await r.arrayBuffer();
+
   if (onStep) onStep('曲を聴いています…');
-  const buffer = await actx.decodeAudioData(bytes);
+  let buffer;
+  try {
+    buffer = await actx.decodeAudioData(bytes);
+  } catch (e) {
+    throw new Error('この曲の音を読み取れませんでした');
+  }
+
   if (onStep) onStep('譜面を作っています…');
   // 表示を先に更新してから、重い解析に入る
   await new Promise((res) => setTimeout(res, 30));
-  const analysis = Beat.analyze(buffer);
-  if (!analysis) throw new Error('analyze failed');
+  let analysis;
+  try {
+    analysis = Beat.analyze(buffer);
+  } catch (e) {
+    throw new Error('譜面を作れませんでした');
+  }
+  if (!analysis) throw new Error('この曲はテンポを読み取れませんでした');
+
   const data = { buffer, analysis };
-  if (track.cache.size > 8) track.cache.delete(track.cache.keys().next().value);
+  // 古いものから捨てる
+  while (track.cache.size >= TRACK_CACHE_MAX) {
+    track.cache.delete(track.cache.keys().next().value);
+  }
   track.cache.set(t.url, data);
   return data;
 }
@@ -1154,7 +1185,8 @@ async function doSearch() {
   try {
     renderSongList(await searchTracks(q), false);
   } catch (e) {
-    $('song-status').textContent = '検索できませんでした。通信を確かめてね';
+    $('song-status').textContent = '検索できませんでした。通信を確かめてね（'
+      + (e && e.message ? e.message : e) + '）';
   }
 }
 
@@ -1176,7 +1208,8 @@ async function pickTrack(t, btn) {
     if (after) after();
   } catch (e) {
     track.busy = false;
-    $('song-status').textContent = 'この曲は読み込めませんでした。ほかの曲をえらんでね';
+    $('song-status').textContent = (e && e.message ? e.message : 'この曲は読み込めませんでした')
+      + ' / ほかの曲でもためしてみてね';
     document.querySelectorAll('.song-item').forEach((el) => {
       el.disabled = false;
       el.classList.remove('on');
@@ -1504,7 +1537,10 @@ function renderRound() {
   row.appendChild(t);
 
   $('btn-round-play').disabled = !me || !cloud.round;
-  $('btn-round-song').style.display = cloud.isHost ? 'block' : 'none';
+  // 集計用のURLが分かっていれば、どの端末からでもお題を作れる
+  const canHost = cloudUrlOk(state.cloud.endpoint);
+  $('btn-round-song').style.display = canHost ? 'block' : 'none';
+  $('btn-round-song').textContent = cloud.isHost ? 'お題の曲をかえる' : '自分でお題を作る';
   $('btn-round-link').style.display = cloud.isHost ? 'block' : 'none';
   $('btn-round-share-members').style.display = cloud.isHost ? 'block' : 'none';
 
@@ -1631,7 +1667,7 @@ async function startOnlineTurn() {
     track.current = cloud.round.track;
     track.data = data;
   } catch (e) {
-    $('round-status').textContent = '曲を読み込めませんでした。通信を確かめてね';
+    $('round-status').textContent = e && e.message ? e.message : '曲を読み込めませんでした';
     return;
   }
   $('round-status').textContent = '';
