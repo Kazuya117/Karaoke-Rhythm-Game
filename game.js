@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-26c';
+const VERSION = '2026-09-26d';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -35,8 +35,15 @@ const LANES = 4;
 const WINDOW = { perfect: 0.055, great: 0.105, good: 0.16 };   // 判定幅 (秒)
 const WEIGHT = { perfect: 1, great: 0.75, good: 0.4, miss: 0 };
 const APPROACH = { easy: 1.7, normal: 1.45, hard: 1.2 };        // ノーツが見えてから判定ラインまでの秒数
-const JUDGE_LABEL = { perfect: 'PERFECT', great: 'GREAT', good: 'GOOD', miss: 'MISS' };
-const JUDGE_COLOR = { perfect: '#ffd84d', great: '#7dffb0', good: '#3fe0ff', miss: '#9d94bd' };
+const JUDGE_LABEL = { perfect: 'PERFECT', great: 'GREAT', good: 'GOOD', miss: 'MISS', trap: 'ダメ！' };
+const JUDGE_COLOR = { perfect: '#ffd84d', great: '#7dffb0', good: '#3fe0ff', miss: '#9d94bd', trap: '#ff3b3b' };
+
+// 叩いてはいけない「他メンバーの顔」のノーツ
+const TRAP_COLOR = '#ff3b3b';
+const TRAP_GAP = 0.4;        // 前後にこれだけ間を空けて、避ける余裕を作る
+const TRAP_MIN = 8;          // 何秒おきに出すか (最短)
+const TRAP_MAX = 12;         // 同 (最長)
+const TRAP_PENALTY = 15000;  // 叩いてしまったときの減点
 const LANE_COLOR = ['#ff4fa3', '#3fe0ff', '#ffd84d', '#7dffb0'];
 const AVATAR_COLORS = ['#ff4fa3', '#3fe0ff', '#ffb02e', '#4fd67a', '#ff8a3d', '#b18cff', '#5b9dff', '#ff6b6b'];
 const DIFF_LABEL = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' };
@@ -415,6 +422,12 @@ const sfx = {
     const t = actx.currentTime;
     noiseHit(t, master, { freq: 6000, vol: 0.2, dur: 0.08 });
     if (judge === 'perfect') toneHit(t, master, { f1: 1568, dur: 0.09, vol: 0.06 });
+  },
+  trap() {
+    if (!this.ok()) return;
+    const t = actx.currentTime;
+    toneHit(t, master, { type: 'square', f1: 220, f2: 90, dur: 0.3, vol: 0.18 });
+    noiseHit(t, master, { type: 'lowpass', freq: 900, vol: 0.18, dur: 0.25 });
   },
   next() { if (this.ok()) [659, 880].forEach((f, i) => toneHit(actx.currentTime + i * 0.1, master, { type: 'triangle', f1: f, dur: 0.16, vol: 0.13 })); },
   rank() { if (this.ok()) [784, 988, 1175, 1568].forEach((f, i) => toneHit(actx.currentTime + i * 0.07, master, { f1: f, dur: 0.22, vol: 0.12 })); },
@@ -2007,6 +2020,47 @@ function updateTapPad(t) {
   pad.style.transform = `scale(${1 + glow * 0.05})`;
 }
 
+// 叩いてはいけないノーツを差し込む。
+// 同じレーンの前後 0.4 秒に本物がない場所だけを選ぶ。
+// 別のレーンに音符があっても、そのレーンを叩かなければ誤爆しないため。
+// サビ (全員の顔が流れる時間) には出さない
+function addTraps(chart, spb, diff, faces, rng) {
+  if (diff === 'easy' || !faces.length) return;
+  const notes = chart.notes;
+  if (!notes.length) return;
+  const inFever = (beat) => (chart.fever || []).some(([a, b]) => beat >= a && beat < b);
+  const last = notes[notes.length - 1].beat * spb;
+  const traps = [];
+  let at = (chart.leadBeats || 0) * spb + 5 + rng() * 3;
+
+  while (at < last - 1) {
+    const beat = at / spb;
+    if (!inFever(beat)) {
+      const busy = [];
+      for (let i = 0; i < LANES; i++) busy.push(false);
+      for (const n of notes) {
+        const d = n.beat * spb - at;
+        if (d < -TRAP_GAP) continue;
+        if (d > TRAP_GAP) break;
+        busy[n.lane] = true;
+      }
+      const free = [];
+      for (let i = 0; i < LANES; i++) if (!busy[i]) free.push(i);
+      if (free.length) {
+        traps.push({
+          beat, lane: free[Math.floor(rng() * free.length)], fever: false, trap: true,
+          face: faces[Math.floor(rng() * faces.length)],
+        });
+      }
+    }
+    at += TRAP_MIN + rng() * (TRAP_MAX - TRAP_MIN);
+  }
+
+  if (!traps.length) return;
+  notes.push.apply(notes, traps);
+  notes.sort((a, b) => a.beat - b.beat);
+}
+
 // ---------------------------------------------------------------
 // プレイ
 // ---------------------------------------------------------------
@@ -2059,12 +2113,17 @@ function startTurn() {
       spb = 60 / SONGS[s.song].bpm;
       chart = buildSong(SONGS[s.song], s.diff);
     }
-    for (const n of chart.notes) n.time = n.beat * spb;
-
     // サビ・フィーバー中は全員の顔、それ以外は自分の顔
     const rng = mulberry32(session.idx * 977 + 13);
     const everyone = session.order;
-    for (const n of chart.notes) n.face = n.fever ? everyone[Math.floor(rng() * everyone.length)] : p.id;
+    // 罠に使うのは「自分以外の登録メンバー」
+    const others = state.players.filter((q) => q.id !== p.id).map((q) => q.id);
+    addTraps(chart, spb, s.diff, others, rng);
+    for (const n of chart.notes) {
+      n.time = n.beat * spb;
+      if (n.trap) continue;   // 罠の顔は addTraps が決めている
+      n.face = n.fever ? everyone[Math.floor(rng() * everyone.length)] : p.id;
+    }
 
     play = {
       mode: s.mode, diff: s.diff, player: p, spb,
@@ -2076,6 +2135,8 @@ function startTurn() {
       offset: karaoke ? 0 : s.offset / 1000,
       title: isTrack ? track.current.name : '',
       head: 0, wsum: 0, combo: 0, maxCombo: 0, missStreak: 0, judged: 0,
+      realCount: chart.notes.filter((n) => !n.trap).length,
+      trapHits: 0, trapFaces: {}, trapAt: 0,
       counts: { perfect: 0, great: 0, good: 0, miss: 0 },
       offSum: 0, offN: 0,
       paused: false, done: false,
@@ -2125,13 +2186,14 @@ const isFeverAt = (beat) => play.fever.some(([a, b]) => beat >= a && beat < b);
 const MIN_NOTES = 60;
 
 function scoreOf(total) {
-  return Math.round(1e6 * (0.9 * play.wsum + 0.1 * play.maxCombo) / Math.max(total, 1));
+  const base = Math.round(1e6 * (0.9 * play.wsum + 0.1 * play.maxCombo) / Math.max(total, 1));
+  return Math.max(0, base - play.trapHits * TRAP_PENALTY);
 }
 
-const partialTotal = () => Math.max(play.judged, Math.min(play.notes.length, MIN_NOTES));
+const partialTotal = () => Math.max(play.judged, Math.min(play.realCount, MIN_NOTES));
 
 function liveScore() {
-  return scoreOf(play.endless ? partialTotal() : play.notes.length);
+  return scoreOf(play.endless ? partialTotal() : play.realCount);
 }
 
 function judgeNote(n, judge, dt) {
@@ -2171,7 +2233,22 @@ function tapLane(lane) {
     return null;
   };
   let n = find((m) => m.lane === lane);
-  if (!n && play.diff === 'easy') n = find((m) => Math.abs(m.lane - lane) === 1);   // かんたん: となりのレーンでもOK
+  // かんたん: となりのレーンでもOK。ただし罠は救済しない
+  if (!n && play.diff === 'easy') n = find((m) => !m.trap && Math.abs(m.lane - lane) === 1);
+
+  if (n && n.trap) {
+    n.judged = true;
+    n.result = 'trapped';
+    play.trapHits++;
+    play.trapFaces[n.face] = (play.trapFaces[n.face] || 0) + 1;
+    play.combo = 0;
+    play.missStreak++;
+    play.trapAt = perfNow();
+    play.judgeFx = { judge: 'trap', at: play.trapAt };
+    play.fx.push({ type: 'ghost', lane: n.lane, face: n.face, at: play.trapAt });
+    sfx.trap();
+    return;
+  }
 
   let judge = null;
   if (n) {
@@ -2194,7 +2271,9 @@ function updatePlay() {
   for (let i = play.head; i < notes.length; i++) {
     const n = notes[i];
     if (n.time > t - WINDOW.good) break;
-    if (!n.judged) judgeNote(n, 'miss', 0);
+    if (n.judged) continue;
+    if (n.trap) { n.judged = true; n.result = 'avoided'; }   // 避けられた
+    else judgeNote(n, 'miss', 0);
   }
   while (play.head < notes.length && notes[play.head].judged) play.head++;
 
@@ -2253,11 +2332,16 @@ function rankDeco(letter) {
 function finishTurn(early) {
   if (!play || play.done) return;
   play.done = true;
-  const score = scoreOf(early || play.endless ? partialTotal() : play.notes.length);
+  const score = scoreOf(early || play.endless ? partialTotal() : play.realCount);
   const r = {
     id: play.player.id, score, letter: rankLetter(score),
     counts: play.counts, maxCombo: play.maxCombo,
     avgOffset: play.offN ? Math.round(1000 * play.offSum / play.offN) : null,
+    traps: play.trapHits,
+    trapNames: Object.keys(play.trapFaces).map((id) => {
+      const q = playerById(id);
+      return (q ? q.name : 'だれか') + 'を' + play.trapFaces[id] + '回';
+    }).join('、'),
   };
   session.results.push(r);
   if (session.online) {
@@ -2283,6 +2367,13 @@ function showResult(r, wasKaraoke) {
   $('st-combo').textContent = r.maxCombo;
   $('st-offset').textContent = r.avgOffset === null || wasKaraoke ? '-'
     : `${r.avgOffset > 0 ? '+' : ''}${r.avgOffset}ms ${Math.abs(r.avgOffset) < 25 ? '' : r.avgOffset > 0 ? '(おそめ)' : '(はやめ)'}`;
+  const tn = $('st-trap');
+  if (r.traps) {
+    tn.style.display = 'block';
+    tn.textContent = r.trapNames + ' 叩いてしまった（−' + (r.traps * TRAP_PENALTY).toLocaleString() + '点）';
+  } else {
+    tn.style.display = 'none';
+  }
   $('result-rank').textContent = '';
   $('btn-result-next').textContent = session.online ? 'ランキングを見る'
     : session.idx + 1 < session.order.length ? 'つぎの人へ' : '結果発表へ！';
@@ -2501,9 +2592,33 @@ function drawPlay(now) {
     const cx = (n.lane + 0.5) * laneW;
     const sp = sprites.get(n.face);
     if (sp) ctx.drawImage(sp.color, cx - r, y - r, r * 2, r * 2);
-    ctx.strokeStyle = n.fever ? '#ffe9a0' : LANE_COLOR[n.lane];
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(cx, y, r, 0, TAU); ctx.stroke();
+    if (n.trap) {
+      // 叩いてはいけないノーツ。色と×印の両方で分かるようにする
+      ctx.strokeStyle = TRAP_COLOR;
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(cx, y, r, 0, TAU); ctx.stroke();
+      // ×印は細めにして、誰の顔かは分かるようにしておく
+      ctx.lineCap = 'round';
+      const d = r * 0.44;
+      const cross = () => {
+        ctx.beginPath();
+        ctx.moveTo(cx - d, y - d); ctx.lineTo(cx + d, y + d);
+        ctx.moveTo(cx + d, y - d); ctx.lineTo(cx - d, y + d);
+        ctx.stroke();
+      };
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';   // 明るい顔でも見えるように影をつける
+      ctx.lineWidth = 8;
+      cross();
+      ctx.strokeStyle = TRAP_COLOR;
+      ctx.lineWidth = 5;
+      cross();
+      ctx.lineCap = 'butt';
+      ctx.lineWidth = 4;
+    } else {
+      ctx.strokeStyle = n.fever ? '#ffe9a0' : LANE_COLOR[n.lane];
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(cx, y, r, 0, TAU); ctx.stroke();
+    }
   }
 
   // ヒット・ミスのエフェクト
@@ -2552,6 +2667,16 @@ function drawPlay(now) {
     ctx.fillStyle = JUDGE_COLOR[play.judgeFx.judge];
     ctx.fillText(JUDGE_LABEL[play.judgeFx.judge], 0, 0);
     ctx.restore();
+  }
+
+  // 罠を叩いてしまったときは、画面のふちを赤くする
+  const tf = 1 - (now - play.trapAt) / 0.45;
+  if (tf > 0) {
+    const g2 = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.25, w / 2, h / 2, Math.max(w, h) * 0.7);
+    g2.addColorStop(0, 'rgba(255,59,59,0)');
+    g2.addColorStop(1, `rgba(255,59,59,${0.55 * tf})`);
+    ctx.fillStyle = g2;
+    ctx.fillRect(0, 0, w, h);
   }
 
   // HUD
