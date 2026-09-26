@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-26d';
+const VERSION = '2026-09-26e';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -910,13 +910,20 @@ function importMembers(list) {
       : typeof m.photo === 'string' && /^data:image\//.test(m.photo) ? m.photo : null;
     const same = state.players.find((p) => p.name === name);
     if (same) {
-      // 名前が同じ人は増やさない。写真がまだなければ、そこだけ埋める
-      if (!same.photo && photo) { same.photo = photo; added.push(same); }
+      // 名前が同じ人は増やさない。写真は差し替えるが、
+      // 本人が自分で選んだ写真だけは上書きしない
+      const mayReplace = !same.photo || same.photoFrom !== 'self';
+      if (photo && photo !== same.photo && mayReplace) {
+        same.photo = photo;
+        same.photoFrom = 'import';
+        added.push(same);
+      }
       return;
     }
     const p = {
       id: 'p' + Date.now().toString(36) + i.toString(36) + Math.floor(Math.random() * 1e4).toString(36),
-      name, photo, color: AVATAR_COLORS[state.players.length % AVATAR_COLORS.length], active: true,
+      name, photo, photoFrom: photo ? 'import' : '',
+      color: AVATAR_COLORS[state.players.length % AVATAR_COLORS.length], active: true,
     };
     state.players.push(p);
     added.push(p);
@@ -1010,8 +1017,8 @@ let afterEdit = null;   // 保存したあとにすること
 
 function openEdit(p) {
   editing = p
-    ? { id: p.id, name: p.name, photo: p.photo, color: p.color }
-    : { id: null, name: '', photo: null, color: AVATAR_COLORS[state.players.length % AVATAR_COLORS.length] };
+    ? { id: p.id, name: p.name, photo: p.photo, photo0: p.photo, color: p.color }
+    : { id: null, name: '', photo: null, photo0: null, color: AVATAR_COLORS[state.players.length % AVATAR_COLORS.length] };
   $('edit-title').textContent = p ? 'メンバーを編集' : 'メンバーを追加';
   $('edit-name').value = editing.name;
   $('btn-edit-delete').style.display = p ? 'block' : 'none';
@@ -1032,6 +1039,8 @@ function saveEdit() {
     state.players.push(p);
   }
   Object.assign(p, { name, photo: editing.photo, color: editing.color });
+  // 自分で写真を選び直した人は、配布でも上書きしない
+  if (editing.photo !== editing.photo0) p.photoFrom = editing.photo ? 'self' : '';
   $('modal-edit').classList.remove('on');
   if (!saveState()) toast('保存容量がいっぱいです。この写真は今回だけ使えます');
   buildSprite(p).then(() => {
