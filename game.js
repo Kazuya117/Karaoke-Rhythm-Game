@@ -6,7 +6,16 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-23h';
+const VERSION = '2026-09-26a';
+
+// URL の ?g=... で「別のグループ」を作れる。
+// 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
+const GROUP = (function () {
+  try {
+    const g = new URLSearchParams(location.search).get('g') || '';
+    return g.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
+  } catch (e) { return ''; }
+})();
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
 // 古いまま動いていることがあるので、その可能性を伝えられるようにする
@@ -46,7 +55,7 @@ function mulberry32(a) {
 // ---------------------------------------------------------------
 // 保存データ (メンバーと設定)
 // ---------------------------------------------------------------
-const STORE_KEY = 'krg.v1';
+const STORE_KEY = 'krg.v1' + (GROUP ? '.' + GROUP : '');
 const state = {
   players: [],   // { id, name, photo (dataURL | null), color, active }
   settings: { mode: 'track', song: 0, diff: 'normal', length: 90, sfx: true, shuffle: false, offset: 0, roundBpm: true, songPick: 'same' },
@@ -1509,7 +1518,8 @@ const newRoomCode = () => {
 
 async function cloudGet(room) {
   const base = state.cloud.endpoint;
-  const url = base + (base.includes('?') ? '&' : '?') + 'room=' + encodeURIComponent(room) + '&t=' + Date.now();
+  const url = base + (base.includes('?') ? '&' : '?') + 'room=' + encodeURIComponent(room)
+    + '&g=' + encodeURIComponent(GROUP) + '&t=' + Date.now();
   const r = await fetch(url, { redirect: 'follow' });
   if (!r.ok) throw new Error('GET ' + r.status);
   const j = await r.json();
@@ -1523,7 +1533,7 @@ async function cloudPost(payload) {
     method: 'POST',
     mode: 'no-cors',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(Object.assign({ group: GROUP }, payload)),
     redirect: 'follow',
   });
 }

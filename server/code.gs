@@ -22,7 +22,7 @@
 
 var SHEET_NAME = 'scores';
 var MEMBER_SHEET = 'members';
-var MEMBER_HEADERS = ['memberId', 'name', 'avatar', 'updatedAt'];
+var MEMBER_HEADERS = ['memberId', 'name', 'avatar', 'updatedAt', 'group'];
 var ROUND_SHEET = 'rounds';
 var ROUND_HEADERS = ['room', 'song', 'artist', 'art', 'url', 'diff', 'createdAt'];
 var HEADERS = ['room', 'playerId', 'name', 'score', 'letter',
@@ -38,7 +38,7 @@ function doGet(e) {
     if (!room) return out({ ok: true, ping: true, message: 'ready' });
     return out({
       ok: true, room: room, round: readRound(room),
-      entries: readRoom(room), members: readMembers(),
+      entries: readRoom(room), members: readMembers(groupOf(e && e.parameter)),
     });
   } catch (err) {
     return out({ ok: false, error: String(err) });
@@ -52,7 +52,7 @@ function doPost(e) {
     if (body.type === 'ping') return out({ ok: true, ping: true });
     if (body.type === 'members') {
       lock.waitLock(20000);
-      return out({ ok: true, members: writeMembers(body.list || []) });
+      return out({ ok: true, members: writeMembers(body.list || [], groupOf(body)) });
     }
     if (body.type === 'round') {
       lock.waitLock(20000);
@@ -209,12 +209,20 @@ function getOrCreate(name, headers) {
 }
 
 // ----- メンバー (名前と似顔絵) -----
-function readMembers() {
-  var sheet = getMemberSheet();
-  var rows = sheet.getDataRange().getValues();
+// グループごとに分けて持つ。1つのスプレッドシートで複数の仲間内をさばけるように
+function groupOf(o) {
+  // POST は group、GET は g という名前で届く
+  var v = '';
+  if (o) v = o.group !== undefined && o.group !== '' ? o.group : (o.g || '');
+  return String(v).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
+}
+
+function readMembers(group) {
+  var rows = getMemberSheet().getDataRange().getValues();
   var list = [];
   for (var i = 1; i < rows.length; i++) {
     if (!String(rows[i][0])) continue;
+    if (String(rows[i][4] || '') !== group) continue;
     list.push({
       memberId: String(rows[i][0]),
       name: String(rows[i][1]),
@@ -224,29 +232,41 @@ function readMembers() {
   return list;
 }
 
-// 幹事が配るたびに、まるごと置きかえる
-function writeMembers(list) {
+// 幹事が配るたびに、そのグループのぶんだけ置きかえる
+function writeMembers(list, group) {
   var sheet = getMemberSheet();
-  var last = sheet.getLastRow();
-  if (last > 1) sheet.getRange(2, 1, last - 1, MEMBER_HEADERS.length).clearContent();
+  var rows = sheet.getDataRange().getValues();
+  var keep = [];
+  for (var i = 1; i < rows.length; i++) {
+    if (!String(rows[i][0])) continue;
+    if (String(rows[i][4] || '') !== group) keep.push(rows[i].slice(0, MEMBER_HEADERS.length));
+  }
   var now = new Date();
-  var rows = [];
-  for (var i = 0; i < Math.min(list.length, 30); i++) {
-    var m = list[i] || {};
+  var fresh = [];
+  for (var k = 0; k < Math.min(list.length, 30); k++) {
+    var m = list[k] || {};
     var avatar = String(m.avatar || '');
-    rows.push([
-      String(m.memberId || ('m' + (i + 1))),
+    fresh.push([
+      String(m.memberId || ('m' + (k + 1))),
       String(m.name || '').slice(0, 20),
       avatar.length > MAX_AVATAR ? '' : avatar,
-      now,
+      now, group,
     ]);
   }
-  if (rows.length) sheet.getRange(2, 1, rows.length, MEMBER_HEADERS.length).setValues(rows);
-  return readMembers();
+  var all = keep.concat(fresh);
+  var last = sheet.getLastRow();
+  if (last > 1) sheet.getRange(2, 1, last - 1, MEMBER_HEADERS.length).clearContent();
+  if (all.length) sheet.getRange(2, 1, all.length, MEMBER_HEADERS.length).setValues(all);
+  return readMembers(group);
 }
 
 function getMemberSheet() {
-  return getOrCreate(MEMBER_SHEET, MEMBER_HEADERS);
+  var sheet = getOrCreate(MEMBER_SHEET, MEMBER_HEADERS);
+  // 以前の形 (group 列がない) のシートにも、列だけ足しておく
+  if (String(sheet.getRange(1, MEMBER_HEADERS.length).getValue() || '') !== 'group') {
+    sheet.getRange(1, MEMBER_HEADERS.length).setValue('group');
+  }
+  return sheet;
 }
 
 function readRoom(room) {
