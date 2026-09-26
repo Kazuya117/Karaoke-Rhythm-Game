@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-26b';
+const VERSION = '2026-09-26c';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -1646,9 +1646,32 @@ const cloudRankList = () => cloud.entries.map((e) => ({
 }));
 
 // ----- お題の画面 -----
+// 同じ端末のほかのグループで使っているURLをさがす。
+// グループごとに保存が分かれているので、2つ目以降は空欄から始まってしまうため
+function borrowEndpoint() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || k === STORE_KEY || k.indexOf('krg.v1') !== 0) continue;
+      const d = JSON.parse(localStorage.getItem(k));
+      const u = d && d.cloud && d.cloud.endpoint;
+      if (u && cloudUrlOk(u)) return u;
+    }
+  } catch (e) { /* 読めなければ、手で貼ってもらう */ }
+  return '';
+}
+
 function openCloudSetup() {
-  $('cloud-url').value = state.cloud.endpoint;
-  $('cloud-status').textContent = '';
+  let url = state.cloud.endpoint;
+  let borrowed = false;
+  if (!url) {
+    url = borrowEndpoint();
+    borrowed = !!url;
+  }
+  $('cloud-url').value = url;
+  $('cloud-status').textContent = borrowed
+    ? 'ほかのグループで使っているURLを入れておきました。これでOKなら、そのまま進んでね'
+    : '';
   refreshRoundDiff();
   showScreen('cloud');
 }
