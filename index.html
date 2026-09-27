@@ -322,7 +322,7 @@
   #crop-canvas { width: 300px; height: 300px; border-radius: 16px; touch-action: none; cursor: grab; background: #000; }
 </style>
 </head>
-<body>
+<body data-html="16">
 <div id="app">
   <canvas id="stage"></canvas>
   <button id="btn-pause" aria-label="ポーズ">II</button>
@@ -607,7 +607,19 @@
 </div>
 <input type="file" id="file" accept="image/*" hidden>
 <input type="file" id="file-members" accept="application/json,.json" hidden>
-<script src="beat.js?v=15"></script>
-<script src="game.js?v=15"></script>
+<script>
+// index.html がブラウザに残っていても、中身は新しいものを取りに行けるように、
+// 読み込み先に「10分ごとに変わる目印」を付ける
+(function () {
+  var t = Math.floor(Date.now() / 600000);
+  function load(src, next) {
+    var el = document.createElement('script');
+    el.src = src + '?t=' + t;
+    el.onload = next || null;
+    document.head.appendChild(el);
+  }
+  load('beat.js', function () { load('game.js'); });
+})();
+</script>
 </body>
 </html>

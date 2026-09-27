@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-27b';
+const VERSION = '2026-09-27c';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -28,6 +28,22 @@ function inAppBrowser() {
 }
 // いまどのグループを開いているかは、取り違えると気づきにくいので画面に出す
 const GROUP_LABEL = GROUP ? 'グループ ' + GROUP : 'グループ1';
+
+// このスクリプトが必要とする index.html の版。
+// 画面だけ古いまま残っていることがあるので、その場合は取り直して読み込み直す
+const NEED_HTML = 16;
+
+function healStaleHtml() {
+  const have = Number((document.body && document.body.dataset.html) || 0);
+  if (have >= NEED_HTML) return false;
+  let once = null;
+  try { once = sessionStorage.getItem('krg.heal'); } catch (e) { /* 使えなくても続行 */ }
+  if (once) return false;   // 一度直して駄目なら、そのまま動かす
+  try { sessionStorage.setItem('krg.heal', '1'); } catch (e) { /* 同上 */ }
+  fetch('index.html', { cache: 'reload' })
+    .then(() => location.reload(), () => location.reload());
+  return true;
+}
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1868,8 +1884,10 @@ async function cloudTest() {
   state.cloud.endpoint = u;
   saveState();
   $('cloud-status').textContent = 'ためしています…';
+  let ver = 0;
   try {
-    await cloudGet('');
+    const ping = await cloudGet('');
+    ver = Number(ping.v) || 0;
   } catch (e) {
     $('cloud-status').textContent = '× つながりません。デプロイの「アクセスできるユーザー」が「全員」になっているか確かめてね';
     return;
@@ -1882,9 +1900,14 @@ async function cloudTest() {
     });
     const j = await cloudGet('__test');
     const ok = (j.entries || []).some((e) => e.playerId === '__test');
-    $('cloud-status').textContent = ok
-      ? '○ つながりました！スプレッドシートに「テスト」の行ができています'
-      : '△ 読み取りはできましたが、書き込みが届きませんでした';
+    if (ver < NEED_CODE_VERSION) {
+      $('cloud-status').textContent = `△ つながりましたが、集計コードが古いです（v${ver || 'なし'}／必要 v${NEED_CODE_VERSION}）。`
+        + '「デプロイを管理」→ 鉛筆 → バージョンを「新バージョン」にして入れ直してね';
+    } else {
+      $('cloud-status').textContent = ok
+        ? `○ つながりました！（集計コード v${ver}）スプレッドシートに「テスト」の行ができています`
+        : '△ 読み取りはできましたが、書き込みが届きませんでした';
+    }
   } catch (e) {
     $('cloud-status').textContent = '△ 読み取りはできましたが、書き込みを確かめられませんでした';
   }
@@ -3040,6 +3063,8 @@ function bindAll() {
 // ---------------------------------------------------------------
 // 起動
 // ---------------------------------------------------------------
+if (healStaleHtml()) throw new Error('画面を読み込み直します');
+
 loadState();
 // お題リンクから開かれたときは、その曲とむずかしさで始める
 const roundLink = readRoundLink();
