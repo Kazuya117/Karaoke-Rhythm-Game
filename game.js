@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-27c';
+const VERSION = '2026-09-27d';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -31,7 +31,7 @@ const GROUP_LABEL = GROUP ? 'グループ ' + GROUP : 'グループ1';
 
 // このスクリプトが必要とする index.html の版。
 // 画面だけ古いまま残っていることがあるので、その場合は取り直して読み込み直す
-const NEED_HTML = 16;
+const NEED_HTML = 17;
 
 function healStaleHtml() {
   const have = Number((document.body && document.body.dataset.html) || 0);
@@ -1730,9 +1730,7 @@ function openCloudSetup() {
 // いまの状態を表す文。openRound と「ランキング更新」で同じものを使う
 function roundStatusText() {
   if (cloud.serverOld) {
-    return cloud.isHost
-      ? '集計用のコードが古いままです。Apps Script を新しくしてデプロイし直してね'
-      : '集計用のコードが古いようです。幹事に Apps Script の更新をお願いしてね';
+    return '集計用のコードが古いままです。下の「集計用のURLをたしかめる」から接続をテストしてね（幹事の作業です）';
   }
   if (!cloud.round) {
     return cloud.isHost
@@ -1808,6 +1806,7 @@ function renderRound() {
   $('btn-round-song').textContent = cloud.isHost ? 'お題の曲をかえる' : '自分でお題を作る';
   $('btn-round-link').style.display = cloud.isHost ? 'block' : 'none';
   $('btn-round-share-members').style.display = cloud.isHost ? 'block' : 'none';
+  $('btn-round-fix').style.display = cloud.serverOld && canHost ? 'block' : 'none';
 
   const list = $('round-rank');
   list.textContent = '';
@@ -3004,6 +3003,7 @@ function bindAll() {
   });
   on('btn-who-new', () => { $('modal-who').classList.remove('on'); newMe(); });
   on('btn-round-share-members', shareMembers);
+  on('btn-round-fix', openCloudSetup);
   on('btn-import', () => $('file-members').click());
   $('file-members').addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0];
