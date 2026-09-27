@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-27d';
+const VERSION = '2026-09-27e';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -1691,9 +1691,38 @@ async function cloudRefreshInner() {
   return cloud.entries;
 }
 
-const cloudRankList = () => cloud.entries.map((e) => ({
-  spriteId: 'c:' + e.playerId, name: e.name, score: e.score,
-  letter: e.letter, me: e.playerId === state.cloud.me,
+// 同じ人が別の端末から出していると、端末ごとのIDで別々に並んでしまう。
+// 名前でまとめて、いちばん良いスコアだけを残す
+function mergedEntries() {
+  const byName = new Map();
+  for (const e of cloud.entries) {
+    const key = String(e.name || '').trim() || e.playerId;
+    const mine = e.playerId === state.cloud.me;
+    const cur = byName.get(key);
+    if (!cur) {
+      byName.set(key, {
+        playerId: e.playerId, avatarId: e.avatar ? e.playerId : '',
+        name: e.name, score: e.score, letter: e.letter,
+        tries: e.attempts || 1, me: mine,
+      });
+      continue;
+    }
+    cur.tries += e.attempts || 1;
+    cur.me = cur.me || mine;
+    if (!cur.avatarId && e.avatar) cur.avatarId = e.playerId;
+    if (e.score > cur.score) {
+      cur.playerId = e.playerId;
+      cur.score = e.score;
+      cur.letter = e.letter;
+      if (e.avatar) cur.avatarId = e.playerId;
+    }
+  }
+  return Array.from(byName.values()).sort((a, b) => b.score - a.score);
+}
+
+const cloudRankList = () => mergedEntries().map((e) => ({
+  spriteId: 'c:' + (e.avatarId || e.playerId), name: e.name, score: e.score,
+  letter: e.letter, me: e.me,
 }));
 
 // ----- お題の画面 -----
@@ -1810,9 +1839,9 @@ function renderRound() {
 
   const list = $('round-rank');
   list.textContent = '';
-  cloud.entries.forEach((e, i) => {
+  mergedEntries().forEach((e, i) => {
     const item = document.createElement('div');
-    item.className = 'rank-item' + (e.playerId === state.cloud.me ? ' me' : '');
+    item.className = 'rank-item' + (e.me ? ' me' : '');
     const no = document.createElement('div');
     no.className = 'no';
     no.textContent = String(i + 1);
@@ -1825,7 +1854,7 @@ function renderRound() {
     const lt = document.createElement('div');
     lt.className = 'lt';
     lt.textContent = e.letter;
-    item.append(no, avatarCanvas('c:' + e.playerId, 34, i === 0 ? { crown: true } : {}), nm, sc, lt);
+    item.append(no, avatarCanvas('c:' + (e.avatarId || e.playerId), 34, i === 0 ? { crown: true } : {}), nm, sc, lt);
     list.appendChild(item);
   });
 }
