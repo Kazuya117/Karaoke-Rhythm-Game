@@ -20,6 +20,10 @@
  * (application/json だと事前確認の通信が入って、Apps Script では失敗するため)。
  */
 
+// このコードの版。ゲーム側が「古いまま動いていないか」を見分けるために返す。
+// 中身を変えたら必ず上げること
+var CODE_VERSION = 3;
+
 var SHEET_NAME = 'scores';
 var MEMBER_SHEET = 'members';
 var MEMBER_HEADERS = ['memberId', 'name', 'avatar', 'updatedAt', 'group'];
@@ -309,6 +313,7 @@ function getSheet() {
 }
 
 function out(obj) {
+  obj.v = CODE_VERSION;
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }

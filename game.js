@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-27a';
+const VERSION = '2026-09-27b';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -941,6 +941,13 @@ async function shareMembers() {
   if (!list.length) { toast('先にメンバーを登録してね'); return; }
   $('round-status').textContent = 'メンバーを配っています…';
   try {
+    // 古いコードのままだと、グループに関係なく全員ぶんを置きかえてしまう
+    const check = await cloudGet(cloud.room);
+    if ((Number(check.v) || 0) < NEED_CODE_VERSION) {
+      cloud.serverOld = true;
+      $('round-status').textContent = '集計用のコードが古いままです。配るとほかのグループのメンバーが消えるので、先に Apps Script を新しくしてデプロイし直してね';
+      return;
+    }
     await cloudPost({ type: 'members', list });
     const j = await cloudGet(cloud.room);
     const n = (j.members || []).length;
@@ -1437,6 +1444,8 @@ async function pickTrack(t, btn) {
 //   各自が自分のスマホで別々に遊ぶと、スコアが集まって順位が出る。
 // ---------------------------------------------------------------
 const CLOUD_HOST = 'script.google.com';
+// server/code.gs の版。これより古いと、グループ分けが効かない
+const NEED_CODE_VERSION = 3;
 const cloud = {
   room: '',       // お題のID
   round: null,    // { track, diff }
@@ -1651,8 +1660,8 @@ async function cloudRefresh() {
 async function cloudRefreshInner() {
   await cloudRetry();
   const j = await cloudGet(cloud.room);
-  // 新しいコードなら round を必ず返す。無ければ古いまま動いている
-  cloud.serverOld = !('round' in j);
+  // 新しいコードなら round と版を返す。足りなければ古いまま動いている
+  cloud.serverOld = !('round' in j) || (Number(j.v) || 0) < NEED_CODE_VERSION;
   if (!cloud.round) {
     cloud.round = roundFromServer(j.round);
     if (cloud.round) rememberRound();
@@ -1819,7 +1828,7 @@ async function postRound() {
     song: t.name, artist: t.artist, art: t.art, url: t.url,
   });
   const j = await cloudGet(cloud.room);
-  cloud.serverOld = !('round' in j);
+  cloud.serverOld = !('round' in j) || (Number(j.v) || 0) < NEED_CODE_VERSION;
   return !!(j.round && j.round.url);
 }
 
