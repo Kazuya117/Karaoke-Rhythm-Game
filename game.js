@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-26e';
+const VERSION = '2026-09-27a';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -26,6 +26,8 @@ function inAppBrowser() {
   if (/iPhone|iPad|iPod/.test(ua) && !/Safari/.test(ua)) return 'アプリ内';
   return '';
 }
+// いまどのグループを開いているかは、取り違えると気づきにくいので画面に出す
+const GROUP_LABEL = GROUP ? 'グループ ' + GROUP : 'グループ1';
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -891,7 +893,7 @@ function bindSeg(id, get, set) {
 function showTitle() {
   // 古い index.html が残っている端末でも落ちないようにする
   const v = $('ver');
-  if (v) v.textContent = 'ver ' + VERSION;
+  if (v) v.textContent = GROUP_LABEL + ' ・ ver ' + VERSION;
   const row = $('title-faces');
   row.textContent = '';
   state.players.slice(0, 8).forEach((p) => row.appendChild(avatarCanvas(p.id, 44)));
@@ -943,7 +945,7 @@ async function shareMembers() {
     const j = await cloudGet(cloud.room);
     const n = (j.members || []).length;
     $('round-status').textContent = n
-      ? `${n}人のメンバーを配りました。お題リンクを開いた人に自動で入ります`
+      ? `${GROUP_LABEL} に ${n}人のメンバーを配りました。お題リンクを開いた人に自動で入ります`
       : '配れませんでした。もう一度ためしてね';
   } catch (e) {
     $('round-status').textContent = 'メンバーを配れませんでした。通信を確かめてね';
@@ -979,6 +981,8 @@ function openWho() {
 
 // ----- メンバー -----
 function renderPlayers() {
+  const tag = $('players-group');
+  if (tag) tag.textContent = GROUP_LABEL + ' のメンバー';
   const list = $('player-list');
   list.textContent = '';
   if (!state.players.length) {
