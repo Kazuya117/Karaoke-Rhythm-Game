@@ -322,7 +322,7 @@
   #crop-canvas { width: 300px; height: 300px; border-radius: 16px; touch-action: none; cursor: grab; background: #000; }
 </style>
 </head>
-<body data-html="17">
+<body data-html="18">
 <div id="app">
   <canvas id="stage"></canvas>
   <button id="btn-pause" aria-label="ポーズ">II</button>
@@ -571,7 +571,8 @@
     <div class="box">
       <h3 id="edit-title">メンバーを追加</h3>
       <button id="edit-avatar" aria-label="写真をえらぶ"></button>
-      <button id="btn-photo" class="btn sub">📷 写真をえらぶ</button>
+      <button id="btn-photo" class="btn sub">📷 写真をえらぶ（なくてもOK）</button>
+      <p class="sub" id="edit-face-hint">名前から似顔絵を作ります。写真があればそちらを使います</p>
       <input id="edit-name" type="text" maxlength="8" placeholder="なまえ" autocomplete="off">
       <div class="row">
         <button id="btn-edit-cancel" class="btn ghost">キャンセル</button>
