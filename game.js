@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-27e';
+const VERSION = '2026-09-28a';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
@@ -31,7 +31,7 @@ const GROUP_LABEL = GROUP ? 'グループ ' + GROUP : 'グループ1';
 
 // このスクリプトが必要とする index.html の版。
 // 画面だけ古いまま残っていることがあるので、その場合は取り直して読み込み直す
-const NEED_HTML = 17;
+const NEED_HTML = 18;
 
 function healStaleHtml() {
   const have = Number((document.body && document.body.dataset.html) || 0);
@@ -116,6 +116,225 @@ const playerById = (id) => state.players.find((p) => p.id === id);
 const SPRITE = 192;
 const sprites = new Map();   // id -> { color: canvas, gray: canvas }
 
+// 名前から決まる似顔絵用の種。同じ名前+色ならいつも同じ顔になる
+function faceSeed(name, color) {
+  const s = String(name || '？') + '|' + String(color || '');
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 1;
+}
+
+function mixHex(a, b, t) {
+  const parse = (h) => {
+    const s = String(h || '#888888').replace('#', '');
+    const n = s.length === 3
+      ? s.split('').map((c) => parseInt(c + c, 16))
+      : [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+    return n.map((v) => (Number.isFinite(v) ? v : 136));
+  };
+  const A = parse(a), B = parse(b);
+  const c = A.map((v, i) => Math.round(v + (B[i] - v) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// 写真がない人用。サングラスの位置 (高さ42%) に目が来る似顔絵を描く
+function drawDefaultFace(x, size, name, accent) {
+  const rnd = mulberry32(faceSeed(name, accent));
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const skins = ['#ffe0cc', '#ffd0b0', '#f0b890', '#e8a878', '#d4956a', '#c68662', '#ffe8f0', '#fff2cc'];
+  const hairs = ['#2a1a12', '#3d2818', '#1c1c1c', '#5a3828', '#a84c22', '#d4a85c', '#4a2f6b', '#c94b6a', accent || '#ff4fa3'];
+  const skin = pick(skins);
+  const hair = pick(hairs);
+  const hairStyle = Math.floor(rnd() * 5);   // 0..4
+  const eyeStyle = Math.floor(rnd() * 3);
+  const mouthStyle = Math.floor(rnd() * 4);
+  const blush = rnd() > 0.25;
+  const freckles = rnd() > 0.72;
+  const sparkEye = rnd() > 0.45;
+  const cx = size / 2;
+  const eyeY = size * 0.42;   // 切り抜きガイドと同じ高さ
+  const faceR = size * 0.36;
+
+  // 背景: メンバー色のやわらかい光
+  const bg = x.createRadialGradient(cx, size * 0.35, size * 0.05, cx, cx, size * 0.55);
+  bg.addColorStop(0, mixHex(accent || '#ff4fa3', '#ffffff', 0.35));
+  bg.addColorStop(0.55, accent || '#ff4fa3');
+  bg.addColorStop(1, mixHex(accent || '#ff4fa3', '#140a2e', 0.45));
+  x.fillStyle = bg;
+  x.fillRect(0, 0, size, size);
+
+  // 肩と服
+  x.fillStyle = mixHex(accent || '#ff4fa3', '#22144a', 0.25);
+  x.beginPath();
+  x.ellipse(cx, size * 0.98, size * 0.42, size * 0.22, 0, Math.PI, 0, true);
+  x.fill();
+  x.fillStyle = accent || '#ff4fa3';
+  x.beginPath();
+  x.moveTo(cx - size * 0.16, size * 0.78);
+  x.quadraticCurveTo(cx, size * 0.72, cx + size * 0.16, size * 0.78);
+  x.lineTo(cx + size * 0.28, size);
+  x.lineTo(cx - size * 0.28, size);
+  x.closePath();
+  x.fill();
+
+  // 首
+  x.fillStyle = mixHex(skin, '#000000', 0.06);
+  x.fillRect(cx - size * 0.08, size * 0.68, size * 0.16, size * 0.14);
+
+  // 顔
+  const faceGrad = x.createRadialGradient(cx - faceR * 0.2, eyeY - faceR * 0.35, faceR * 0.1, cx, cx, faceR);
+  faceGrad.addColorStop(0, mixHex(skin, '#ffffff', 0.22));
+  faceGrad.addColorStop(1, skin);
+  x.fillStyle = faceGrad;
+  x.beginPath();
+  x.ellipse(cx, size * 0.48, faceR * 0.95, faceR, 0, 0, TAU);
+  x.fill();
+
+  // 髪 (目より上に多め)
+  x.fillStyle = hair;
+  x.strokeStyle = mixHex(hair, '#000000', 0.25);
+  x.lineWidth = size * 0.012;
+  if (hairStyle === 0) {
+    // ふわボブ
+    x.beginPath();
+    x.ellipse(cx, size * 0.36, faceR * 1.08, faceR * 0.95, 0, Math.PI, 0);
+    x.fill();
+    x.beginPath();
+    x.ellipse(cx - faceR * 0.85, size * 0.5, faceR * 0.38, faceR * 0.55, -0.2, 0, TAU);
+    x.ellipse(cx + faceR * 0.85, size * 0.5, faceR * 0.38, faceR * 0.55, 0.2, 0, TAU);
+    x.fill();
+  } else if (hairStyle === 1) {
+    // ショート
+    x.beginPath();
+    x.ellipse(cx, size * 0.34, faceR * 1.02, faceR * 0.78, 0, Math.PI * 1.05, -0.05, true);
+    x.fill();
+  } else if (hairStyle === 2) {
+    // ぱっつん
+    x.beginPath();
+    x.ellipse(cx, size * 0.34, faceR * 1.05, faceR * 0.88, 0, Math.PI, 0);
+    x.fill();
+    x.fillRect(cx - faceR * 0.95, eyeY - size * 0.12, faceR * 1.9, size * 0.1);
+  } else if (hairStyle === 3) {
+    // ツンツン
+    x.beginPath();
+    x.ellipse(cx, size * 0.38, faceR * 0.98, faceR * 0.7, 0, Math.PI, 0);
+    x.fill();
+    for (let i = -2; i <= 2; i++) {
+      x.beginPath();
+      x.moveTo(cx + i * faceR * 0.28 - faceR * 0.12, size * 0.34);
+      x.lineTo(cx + i * faceR * 0.28, size * 0.14);
+      x.lineTo(cx + i * faceR * 0.28 + faceR * 0.12, size * 0.34);
+      x.closePath();
+      x.fill();
+    }
+  } else {
+    // サイドパート
+    x.beginPath();
+    x.ellipse(cx, size * 0.35, faceR * 1.05, faceR * 0.9, 0, Math.PI, 0);
+    x.fill();
+    x.beginPath();
+    x.moveTo(cx - faceR * 0.1, eyeY - size * 0.02);
+    x.quadraticCurveTo(cx - faceR * 0.7, eyeY - size * 0.08, cx - faceR * 1.05, eyeY + size * 0.08);
+    x.quadraticCurveTo(cx - faceR * 0.55, eyeY - size * 0.18, cx - faceR * 0.05, eyeY - size * 0.12);
+    x.closePath();
+    x.fill();
+  }
+
+  // 眉と目
+  const eyeDx = faceR * 0.38;
+  for (const side of [-1, 1]) {
+    const ex = cx + side * eyeDx;
+    x.strokeStyle = mixHex(hair, '#000000', 0.35);
+    x.lineWidth = size * 0.018;
+    x.lineCap = 'round';
+    x.beginPath();
+    x.moveTo(ex - size * 0.06, eyeY - size * 0.07);
+    x.quadraticCurveTo(ex, eyeY - size * 0.1, ex + size * 0.06, eyeY - size * 0.07);
+    x.stroke();
+
+    x.fillStyle = '#fff';
+    if (eyeStyle === 0) {
+      x.beginPath(); x.ellipse(ex, eyeY, size * 0.07, size * 0.085, 0, 0, TAU); x.fill();
+    } else if (eyeStyle === 1) {
+      x.beginPath(); x.arc(ex, eyeY, size * 0.072, 0, TAU); x.fill();
+    } else {
+      x.beginPath();
+      x.moveTo(ex - size * 0.075, eyeY);
+      x.quadraticCurveTo(ex, eyeY - size * 0.09, ex + size * 0.075, eyeY);
+      x.quadraticCurveTo(ex, eyeY + size * 0.08, ex - size * 0.075, eyeY);
+      x.fill();
+    }
+    x.fillStyle = '#2a2140';
+    x.beginPath(); x.arc(ex, eyeY + size * 0.008, size * 0.038, 0, TAU); x.fill();
+    if (sparkEye) {
+      x.fillStyle = '#fff';
+      x.beginPath(); x.arc(ex - size * 0.015, eyeY - size * 0.01, size * 0.012, 0, TAU); x.fill();
+    }
+  }
+
+  // ほほ紅・そばかす
+  if (blush) {
+    x.fillStyle = 'rgba(255,120,140,0.35)';
+    x.beginPath(); x.ellipse(cx - faceR * 0.55, eyeY + size * 0.1, size * 0.07, size * 0.04, 0, 0, TAU); x.fill();
+    x.beginPath(); x.ellipse(cx + faceR * 0.55, eyeY + size * 0.1, size * 0.07, size * 0.04, 0, 0, TAU); x.fill();
+  }
+  if (freckles) {
+    x.fillStyle = 'rgba(160,90,60,0.45)';
+    for (const [fx, fy] of [[-0.45, 0.12], [-0.32, 0.16], [0.35, 0.13], [0.48, 0.17]]) {
+      x.beginPath(); x.arc(cx + faceR * fx, eyeY + size * fy, size * 0.01, 0, TAU); x.fill();
+    }
+  }
+
+  // 口
+  x.strokeStyle = '#d45a6a';
+  x.fillStyle = '#d45a6a';
+  x.lineWidth = size * 0.02;
+  x.lineCap = 'round';
+  const my = eyeY + size * 0.18;
+  if (mouthStyle === 0) {
+    x.beginPath();
+    x.arc(cx, my - size * 0.02, size * 0.07, 0.15, Math.PI - 0.15);
+    x.stroke();
+  } else if (mouthStyle === 1) {
+    x.beginPath();
+    x.ellipse(cx, my, size * 0.055, size * 0.04, 0, 0, TAU);
+    x.fill();
+    x.fillStyle = 'rgba(255,255,255,0.55)';
+    x.beginPath();
+    x.ellipse(cx, my - size * 0.01, size * 0.04, size * 0.018, 0, Math.PI, 0);
+    x.fill();
+  } else if (mouthStyle === 2) {
+    // にゃん口
+    x.beginPath();
+    x.moveTo(cx - size * 0.05, my);
+    x.quadraticCurveTo(cx - size * 0.02, my + size * 0.04, cx, my);
+    x.quadraticCurveTo(cx + size * 0.02, my + size * 0.04, cx + size * 0.05, my);
+    x.stroke();
+  } else {
+    x.beginPath();
+    x.moveTo(cx - size * 0.045, my);
+    x.quadraticCurveTo(cx, my + size * 0.05, cx + size * 0.045, my);
+    x.stroke();
+  }
+
+  // 名前の1文字を小さなバッジに。誰の顔か分かりやすくする
+  const ch = Array.from(name || '？')[0];
+  const bx = cx + faceR * 0.78, by = size * 0.72;
+  x.fillStyle = 'rgba(20,10,46,0.72)';
+  x.beginPath(); x.arc(bx, by, size * 0.11, 0, TAU); x.fill();
+  x.strokeStyle = 'rgba(255,255,255,0.85)';
+  x.lineWidth = size * 0.012;
+  x.beginPath(); x.arc(bx, by, size * 0.11, 0, TAU); x.stroke();
+  x.fillStyle = '#fff';
+  x.font = `bold ${size * 0.12}px "Hiragino Maru Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif`;
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.fillText(ch, bx, by + size * 0.008);
+}
+
 function buildSprite(p) {
   return new Promise((resolve) => {
     const finish = (img) => {
@@ -127,13 +346,7 @@ function buildSprite(p) {
       if (img) {
         x.drawImage(img, 0, 0, SPRITE, SPRITE);
       } else {
-        // 写真がない人は、色つきの丸に名前の1文字目
-        x.fillStyle = p.color || AVATAR_COLORS[0];
-        x.fillRect(0, 0, SPRITE, SPRITE);
-        x.fillStyle = 'rgba(255,255,255,0.95)';
-        x.font = `bold ${SPRITE * 0.5}px "Hiragino Maru Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif`;
-        x.textAlign = 'center'; x.textBaseline = 'middle';
-        x.fillText(Array.from(p.name || '？')[0], SPRITE / 2, SPRITE / 2 + SPRITE * 0.03);
+        drawDefaultFace(x, SPRITE, p.name, p.color || AVATAR_COLORS[0]);
       }
       x.restore();
 
@@ -1026,7 +1239,7 @@ function renderPlayers() {
     const nm = document.createElement('div');
     nm.className = 'p-name'; nm.textContent = p.name;
     const ed = document.createElement('div');
-    ed.className = 'p-edit'; ed.textContent = p.photo ? 'タップで編集' : 'タップで写真を登録';
+    ed.className = 'p-edit'; ed.textContent = p.photo ? 'タップで編集' : '似顔絵つき ・ タップで写真もOK';
     txt.append(nm, ed);
     main.appendChild(txt);
     main.addEventListener('click', () => { sfx.click(); openEdit(p); });
@@ -1049,6 +1262,10 @@ function openEdit(p) {
   $('edit-title').textContent = p ? 'メンバーを編集' : 'メンバーを追加';
   $('edit-name').value = editing.name;
   $('btn-edit-delete').style.display = p ? 'block' : 'none';
+  const photoBtn = $('btn-photo');
+  if (photoBtn) photoBtn.textContent = editing.photo ? '📷 写真をかえる' : '📷 写真をえらぶ（なくてもOK）';
+  const hint = $('edit-face-hint');
+  if (hint) hint.style.display = editing.photo ? 'none' : 'block';
   refreshEditAvatar();
   $('modal-edit').classList.add('on');
 }
@@ -1056,6 +1273,10 @@ function openEdit(p) {
 function refreshEditAvatar() {
   const tmp = { id: '__edit', name: $('edit-name').value || '？', photo: editing.photo, color: editing.color };
   buildSprite(tmp).then(() => setAvatar($('edit-avatar'), '__edit', 110));
+  const hint = $('edit-face-hint');
+  if (hint) hint.style.display = editing.photo ? 'none' : 'block';
+  const photoBtn = $('btn-photo');
+  if (photoBtn) photoBtn.textContent = editing.photo ? '📷 写真をかえる' : '📷 写真をえらぶ（なくてもOK）';
 }
 
 function saveEdit() {
