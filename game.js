@@ -6,7 +6,7 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-10-07a';
+const VERSION = '2026-10-07b';
 
 // URL の ?g=... で「別のグループ」を作れる。
 // 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる。
@@ -41,7 +41,7 @@ const GROUP_LABEL = 'グループ ' + GROUP;
 
 // このスクリプトが必要とする index.html の版。
 // 画面だけ古いまま残っていることがあるので、その場合は取り直して読み込み直す
-const NEED_HTML = 18;
+const NEED_HTML = 19;
 
 function healStaleHtml() {
   const have = Number((document.body && document.body.dataset.html) || 0);
