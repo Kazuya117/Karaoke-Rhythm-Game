@@ -6,15 +6,25 @@
 //   写真は localStorage (この端末の中) にだけ保存し、外部には送信しない。
 // ===============================================================
 
-const VERSION = '2026-09-28a';
+const VERSION = '2026-10-07a';
 
 // URL の ?g=... で「別のグループ」を作れる。
-// 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる
+// 保存するデータもスプレッドシートのメンバーも、グループごとに分かれる。
+// グループ1 (未指定 / g=1) と グループ3 (g=3) は廃止し、グループ2 (b) に統一する
 const GROUP = (function () {
   try {
-    const g = new URLSearchParams(location.search).get('g') || '';
-    return g.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
-  } catch (e) { return ''; }
+    const sp = new URLSearchParams(location.search);
+    let g = (sp.get('g') || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
+    if (!g || g === '1' || g === '3') {
+      if (sp.get('g') !== 'b') {
+        sp.set('g', 'b');
+        const q = sp.toString();
+        location.replace(location.pathname + (q ? '?' + q : '') + location.hash);
+      }
+      return 'b';
+    }
+    return g;
+  } catch (e) { return 'b'; }
 })();
 
 // LINE などアプリの中のブラウザは、Safari とは別のキャッシュを持っている。
@@ -27,7 +37,7 @@ function inAppBrowser() {
   return '';
 }
 // いまどのグループを開いているかは、取り違えると気づきにくいので画面に出す
-const GROUP_LABEL = GROUP ? 'グループ ' + GROUP : 'グループ1';
+const GROUP_LABEL = 'グループ ' + GROUP;
 
 // このスクリプトが必要とする index.html の版。
 // 画面だけ古いまま残っていることがあるので、その場合は取り直して読み込み直す
